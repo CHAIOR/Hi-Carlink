@@ -41,6 +41,8 @@ fun main(args: Array<String>) {
         System.err.println(PcOptions.USAGE)
         exitProcess(1)
     }
+    // TCP/UDP 动作日志默认开着：排查「一分钟内掉线」要看 UDP 保活。
+    System.setProperty("openhc.debug.actions", "1")
     options.dumpBtDir?.let { dir ->
         java.io.File(dir).mkdirs()
         System.setProperty("openhc.dumpBt", dir)
@@ -52,9 +54,15 @@ fun main(args: Array<String>) {
  * 一次无线会话：蓝牙握手/认证 → 开热点 → 手机连 TCP → 投屏 → 窗口上屏 + 鼠标触摸回传 + 声音。
  */
 internal class PcApp(private val options: PcOptions) {
+    private companion object {
+        /** 断线后自动回连的间隔。 */
+        const val AUTO_RECONNECT_DELAY_MS = 3_000L
+    }
     private val time = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
 
     @Volatile private var ended = false
+    @Volatile private var windowClosed = false
+    @Volatile private var restartRequested: java.util.concurrent.CountDownLatch? = null
     @Volatile private var endReason: WirelessEndReason? = null
 
     /** 当前阶段（给 20 秒一次的「当前阶段」日志用）。 */
@@ -62,6 +70,12 @@ internal class PcApp(private val options: PcOptions) {
 
     /** 首次配对的 6 位连接码。 */
     @Volatile private var pin = ""
+
+    /** 上次连成功的手机：存在 ~/.hi-carlink/phone.properties，下次启动先主动回连，不用扫码。 */
+    private val phoneFile: java.io.File? = runCatching {
+        val dir = java.io.File(System.getProperty("user.home"), ".hi-carlink").apply { mkdirs() }
+        java.io.File(dir, "phone.properties")
+    }.getOrNull()
 
     /** 同一份日志也写进文件，出问题时直接把文件发出来就行。 */
     private val logFile: java.io.File? = runCatching {
@@ -76,7 +90,7 @@ internal class PcApp(private val options: PcOptions) {
 
     fun run(): Int {
         runCatching { logFile?.writeText("", Charsets.UTF_8) }
-        log("Hi Carlink PC（实验）")
+        log("Hi Carlink PC 0.2.0（实验）· 基于 OpenHC (GPL-3.0)")
         val identity = try {
             IdentityAssets.parse(Files.readString(options.identity))
         } catch (e: IOException) {
@@ -107,7 +121,7 @@ internal class PcApp(private val options: PcOptions) {
             options.bluetoothAddress
         }
 
-        val display = DisplaySettings(options.width, options.height, options.fps, options.dpi, 1.0)
+        val display = DisplaySettings(options.width, options.height, options.fps, options.dpi, options.density)
         val config = try {
             WirelessReceiverConfig(
                 identity = identity,
@@ -116,6 +130,8 @@ internal class PcApp(private val options: PcOptions) {
                 trustStore = trust,
                 supportsUsb = false,
                 touchInput = true,
+                // 鼠标右键/中键要发安卓的返回/桌面键。
+                keyInput = true,
                 // 第一版只放 PCM：手机按声明优先发 PCM，Windows 上直接用 Java Sound 放。
                 audio = AudioSettings(codec = AudioCodec.PCM),
                 timeouts = WirelessTimeouts(networkStartMillis = 20_000),
@@ -125,11 +141,66 @@ internal class PcApp(private val options: PcOptions) {
             return 1
         }
 
-        window = VideoWindow(options.width, options.height, ::sendTouch) {
-            log("窗口被关掉，结束会话")
-            runner.stop()
-        }
+        window = VideoWindow(
+            options.width,
+            options.height,
+            ::sendTouch,
+            ::sendKey,
+            {
+                log("窗口被关掉，结束会话")
+                windowClosed = true
+                if (this::runner.isInitialized) runner.stop()
+            },
+            initialFullscreen = options.fullscreen,
+            onRestart = { restartRequested?.countDown() },
+        )
         window.show()
+
+        val saved = loadPhone()
+        if (saved != null) log("上次连过的手机：${saved.first}（断开时用它自动回连）")
+        var qrMode = true
+        var autoAttempts = 0
+        while (!windowClosed) {
+            val target: Pair<String, String>? = if (qrMode) null else saved
+            val reconnectFailed = runSession(config, target)
+            if (windowClosed) break
+            val reasonText = endReason?.toString() ?: ""
+            val networkDrop = reasonText.contains("网络错误") || reasonText.contains("被手机关闭") ||
+                reasonText.contains("连接被关闭")
+            if (!qrMode && reconnectFailed) {
+                log("主动回连没成，改成出二维码")
+                qrMode = true
+                continue
+            }
+            if (qrMode && networkDrop && saved != null && autoAttempts < 2) {
+                autoAttempts++
+                log("连接断了（$reasonText），${AUTO_RECONNECT_DELAY_MS / 1000} 秒后自动回连（第 $autoAttempts 次）")
+                Thread.sleep(AUTO_RECONNECT_DELAY_MS)
+                qrMode = false
+                continue
+            }
+            autoAttempts = 0
+            window.showEnd("会话结束：${reasonText.ifEmpty { "未知" }}", allowRestart = true)
+            val latch = java.util.concurrent.CountDownLatch(1)
+            restartRequested = latch
+            val restart = latch.await(30, java.util.concurrent.TimeUnit.MINUTES)
+            restartRequested = null
+            if (windowClosed || !restart) break
+            log("用户点了重新开始")
+            window.hideRestart()
+            qrMode = true
+        }
+        window.close()
+        log("程序退出")
+        return 0
+    }
+
+    /** 跑一次无线会话（窗口一直留着）。[reconnect] 不为 null 时走主动回连；返回「回连是否失败」。 */
+    private fun runSession(config: WirelessReceiverConfig, reconnect: Pair<String, String>? = null): Boolean {
+        ended = false
+        endReason = null
+        stage = "等手机扫码"
+        window.hideRestart()
         val fileOut = options.videoOut?.let { out ->
             try {
                 BufferedOutputStream(Files.newOutputStream(out), 1 shl 20)
@@ -166,7 +237,12 @@ internal class PcApp(private val options: PcOptions) {
             UnavailableWifi
         }
         platform = WindowsPlatform(rfcomm, wifi, results, ::onWirelessEvent) { log(it) }
-        bridge = WirelessRunnerBridge(session, session::start) { output -> platform.execute(output) }
+        val begin: (Long) -> List<io.github.gcbond.openhc.core.session.WirelessOutput> = if (reconnect != null) {
+            { now -> session.startReconnect(reconnect.first, reconnect.second, now) }
+        } else {
+            session::start
+        }
+        bridge = WirelessRunnerBridge(session, begin) { output -> platform.execute(output) }
         runner = SocketRunner(bridge, ::onSessionEvent, SocketRunner.Options(threadName = "HiCarlink-PC", log = { log("[执行器] $it") }))
         // 必须先把桥接连上执行器再 start：平台回调（蓝牙连上、数据到达）都经桥接排回协议线程。
         bridge.attach(runner)
@@ -196,14 +272,28 @@ internal class PcApp(private val options: PcOptions) {
             }
         }
         while (!runner.awaitTermination(60_000)) {
-            // 等会话结束。
+            if (windowClosed) break
         }
         platform.closeAll()
-        window.close()
         audio.close()
         runCatching { fileOut?.close() }
         log("结束：${endReason ?: "未知"}")
-        return 0
+        val reasonText = endReason?.toString() ?: ""
+        return reconnect != null && reasonText.contains("主动回连")
+    }
+
+    /** 鼠标右键/中键 → 安卓按键，同样投到协议线程。 */
+    private fun sendKey(key: HiSightInput.Key) {
+        if (!ended) {
+            runner.submit {
+                try {
+                    bridge.sendInput(key)
+                } catch (e: RuntimeException) {
+                    log("按键没发出去：${e.javaClass.simpleName}：${e.message}")
+                    emptyList()
+                }
+            }
+        }
     }
 
     /** 鼠标触摸（Swing 线程）→ 投到协议线程，经桥接发给手机。 */
@@ -236,7 +326,8 @@ internal class PcApp(private val options: PcOptions) {
                 )
             }
             is WirelessEvent.PhoneBluetoothConnected -> {
-                log("手机蓝牙连上来了")
+                log("手机蓝牙连上来了（${event.address}）")
+                savePhone(event.address)
                 stage = "手机蓝牙已连上，等握手"
                 window.setStatus("手机蓝牙已连接，正在握手…")
             }
@@ -284,6 +375,23 @@ internal class PcApp(private val options: PcOptions) {
         println(line)
         runCatching { logFile?.appendText(line + "\n", Charsets.UTF_8) }
     }
+
+    private fun loadPhone(): Pair<String, String>? = runCatching {
+        val f = phoneFile ?: return@runCatching null
+        if (!f.isFile) return@runCatching null
+        val props = java.util.Properties().apply { f.inputStream().use { load(it) } }
+        val address = props.getProperty("address")?.trim().orEmpty()
+        if (address.isEmpty()) null else address to "HiCar Phone"
+    }.getOrNull()
+
+    private fun savePhone(address: String) = runCatching {
+        val f = phoneFile ?: return@runCatching
+        val props = java.util.Properties().apply {
+            setProperty("address", address)
+            setProperty("name", "HiCar Phone")
+        }
+        f.outputStream().use { props.store(it, "last paired phone") }
+    }.let { }
 
     private fun isWindows() = System.getProperty("os.name").lowercase().contains("win")
 

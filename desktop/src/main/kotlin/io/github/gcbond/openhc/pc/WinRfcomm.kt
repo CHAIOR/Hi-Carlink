@@ -372,8 +372,10 @@ private class Client(
         socket = fd
         val port = (channel ?: 0).toLong()
         val addr = sockaddrBth(btAddressToLong(address), uuid, port)
-        if (Ws2.INSTANCE.connect(fd, addr, SOCKADDR_BTH_SIZE) != 0) {
-            val err = Ws2.lastError()
+        val connectRc = Ws2.INSTANCE.connect(fd, addr, SOCKADDR_BTH_SIZE)
+        val connectErr = Native.getLastError()
+        if (connectRc != 0) {
+            val err = if (connectErr != 0) connectErr else Ws2.lastError()
             Ws2.INSTANCE.closesocket(fd)
             socket = INVALID_SOCKET
             events.onError("连手机蓝牙服务失败（WSA $err）：手机不在附近、没配对，或蓝牙关着")

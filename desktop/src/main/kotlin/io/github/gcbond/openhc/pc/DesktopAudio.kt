@@ -13,14 +13,14 @@ import javax.sound.sampled.SourceDataLine
 /**
  * 声音出口：会话交出的 PCM 包直接塞给系统的 [SourceDataLine]（16 位小端、按手机报的采样率和声道数）。
  *
- * 第一版只放 PCM（认证时向手机声明 PCM 优先）；手机坚持发 AAC 时只记日志，暂时没有声音。
+ * PCM 直接写；AAC 先用 [LiveAacDecoder] 解成 PCM 再写（认证时仍向手机声明 PCM 优先）。
  * 播放放在独立线程上，协议线程只把字节放进有界队列：队列满了就丢，绝不阻塞收包。
  */
 internal class DesktopAudio(private val log: (String) -> Unit = {}) : AudioStreamListener, AutoCloseable {
     private val queue = LinkedBlockingQueue<ByteArray>(256)
     private var aac: LiveAacDecoder? = null
     private var aacKey: Pair<Int, Int>? = null
-    private var aacWarned = false
+
     @Volatile private var running = true
     @Volatile private var line: SourceDataLine? = null
     @Volatile private var formatKey: Pair<Int, Int>? = null
@@ -40,26 +40,44 @@ internal class DesktopAudio(private val log: (String) -> Unit = {}) : AudioStrea
         val info = packet.stream
         if (!packet.playable) return
         val isAac = packet.codec == AudioCodec.AAC || info.codec == AudioCodec.AAC
-        if (isAac) {
-            // AAC 解码走 avcodec 时目前会让 JVM 崩（原生内存问题），先整条路关掉，避免测试时整个程序闪退。
-            if (!aacWarned) {
-                aacWarned = true
-                log("手机发的是 AAC：这一版没有声音（AAC 解码还有原生内存问题；先在手机/车机设置里把声音编码改成 PCM）")
+        var rate = info.sampleRate
+        var channels = info.channels
+        val bytes = if (isAac) {
+            val decoder = aacFor(info) ?: return
+            val decoded = runCatching { decoder.decode(packet.data, packet.offset, packet.length) }.getOrElse {
+                log("AAC 解码失败：${it.javaClass.simpleName}：${it.message}")
+                return
             }
-            return
+            if (decoded.isEmpty()) return
+            rate = decoder.sampleRate
+            channels = decoder.channelCount
+            decoded
+        } else {
+            ByteArray(packet.length).also { System.arraycopy(packet.data, packet.offset, it, 0, packet.length) }
         }
-        val bytes = ByteArray(packet.length)
-        System.arraycopy(packet.data, packet.offset, bytes, 0, packet.length)
         if (!queue.offer(bytes)) {
             dropped++
             if (dropped % 100 == 1L) log("声音队列满，丢弃 ${dropped} 包（电脑太慢或解码卡住）")
             return
         }
-        val key = info.sampleRate to info.channels
+        val key = rate to channels.coerceIn(1, 2)
         if (formatKey != key) {
             formatKey = key
             queue.offer(BYTEARRAY_MARKER)
         }
+    }
+
+    /** 按会话参数建（或复用）AAC 解码器。 */
+    private fun aacFor(info: io.github.gcbond.openhc.core.dmsdp.audio.AudioStreamInfo): LiveAacDecoder? {
+        val channels = info.channels.coerceIn(1, 2)
+        val key = info.sampleRate to channels
+        if (aac != null && aacKey == key) return aac
+        runCatching { aac?.close() }
+        aac = runCatching { LiveAacDecoder(info.sampleRate, channels) }
+            .onFailure { log("AAC 解码器建不起来：${it.message}") }
+            .getOrNull()
+        aacKey = key
+        return aac
     }
 
     private fun playLoop() {

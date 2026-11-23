@@ -46,7 +46,7 @@ fun main() {
     val clip = recorderOut.toByteArray()
     println("自检：编码完成 ${clip.size} 字节 H.264")
 
-    val window = VideoWindow(width, height, { _: HiSightInput -> }, {})
+    val window = VideoWindow(width, height, onTouch = { _: HiSightInput -> }, onClosed = {})
     window.show()
     // 按 NAL 起始码切开逐个喂：和真实收帧一样，不把一帧从中间截断。
     val bounds = ArrayList<Int>()

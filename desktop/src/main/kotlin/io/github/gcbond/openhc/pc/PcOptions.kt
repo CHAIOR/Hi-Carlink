@@ -13,14 +13,18 @@ internal class PcOptions(
     /** 电脑开的热点的名称和口令（要和 Windows「移动热点」里设置的一致）。 */
     val hotspotSsid: String,
     val hotspotPassword: String,
-    val width: Int = 1280,
-    val height: Int = 720,
-    val fps: Int = 30,
-    val dpi: Int = 160,
+    val width: Int = 2560,
+    val height: Int = 1440,
+    val fps: Int = 60,
+    val dpi: Int = 320,
     val videoOut: Path? = null,
     val durationSeconds: Long? = null,
     /** 报给手机的热点频率（MHz）：Windows 读不到真实信道，先按 2.4G 第 6 信道。 */
     val frequencyMhz: Int = 2437,
+    /** 缩放比例（安卓 density）：和分辨率成比例放大时，手机界面布局保持 1280x720 那一套。 */
+    val density: Double = 2.0,
+    /** 启动就全屏铺满（任务栏让开、画面裁切）。 */
+    val fullscreen: Boolean = false,
     /** 诊断：把蓝牙收发原始字节写到这个目录。 */
     val dumpBtDir: String? = null,
 ) {
@@ -34,8 +38,10 @@ internal class PcOptions(
               --bt <地址|auto>    本机蓝牙地址，默认 auto（自动读系统里的）
               --ssid <名称>       要用的 Windows 移动热点名称（默认 HiCarlink）
               --password <口令>   热点口令，至少 8 位（默认 hicarlink123）
-              --width/--height/--fps/--dpi  声明给手机的画布，默认 1280x720@30、dpi 160
+              --width/--height/--fps/--dpi  声明给手机的画布，默认 2560x1440@60、dpi 320、density 2.0（界面布局同 1280x720，只是更清楚）
               --freq <MHz>       报给手机的热点频率（Windows 读不到真实信道，默认 2437）
+              --density <倍数>   缩放比例，默认 2.0（配合 2560x1440 保持原来的界面布局）
+              --fullscreen       启动即全屏（F11 也能切；全屏时画面裁切铺满、任务栏让开）
               --dump-bt <目录>   诊断：把蓝牙收发原始字节写进这个目录
               --video-out <文件>  把 H.264 原样写到文件（调试用）
               --duration <秒>     运行这么久后自动结束
@@ -48,14 +54,16 @@ internal class PcOptions(
             var bt = "auto"
             var ssid = "HiCarlink"
             var password = "hicarlink123"
-            var width = 1280
-            var height = 720
-            var fps = 30
-            var dpi = 160
+            var width = 2560
+            var height = 1440
+            var fps = 60
+            var dpi = 320
             var videoOut: Path? = null
             var duration: Long? = null
             var freq = 2437
             var dumpBt: String? = null
+            var density = 2.0
+            var fullscreen = false
             var i = 0
             fun value(name: String): String {
                 if (i + 1 >= args.size) throw IllegalArgumentException("$name 后面要跟一个值")
@@ -77,6 +85,8 @@ internal class PcOptions(
                     "--duration" -> duration = value(a).toLongOrNull() ?: throw IllegalArgumentException("--duration 要是秒数")
                     "--freq" -> freq = value(a).toIntOrNull() ?: throw IllegalArgumentException("--freq 要是 MHz 数")
                     "--dump-bt" -> dumpBt = value(a)
+                    "--density" -> density = value(a).toDoubleOrNull() ?: throw IllegalArgumentException("--density 要是小数")
+                    "--fullscreen", "--full" -> fullscreen = true
                     else -> throw IllegalArgumentException("不认识的参数 $a")
                 }
                 i++
@@ -97,6 +107,8 @@ internal class PcOptions(
                 durationSeconds = duration,
                 frequencyMhz = freq,
                 dumpBtDir = dumpBt,
+                density = density,
+                fullscreen = fullscreen,
             )
         }
     }

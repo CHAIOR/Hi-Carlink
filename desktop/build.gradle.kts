@@ -15,6 +15,8 @@ dependencies {
     // H.264 解码（JavaCV 打包了 Windows x64 的 ffmpeg 原生库）。
     implementation("org.bytedeco:javacv:1.5.14")
     implementation("org.bytedeco:ffmpeg:8.1.2-1.5.14:windows-x86_64")
+
+    testImplementation(libs.kotlin.test)
 }
 
 application {
@@ -63,5 +65,22 @@ tasks.register<JavaExec>("aacTest") {
 // 诊断：试出系统认的蓝牙 socket 安全选项。
 tasks.register<JavaExec>("bthopts") {
     mainClass.set("io.github.gcbond.openhc.pc.BthOptsKt")
+    classpath = sourceSets["main"].runtimeClasspath
+}
+
+// 信任库自检：Windows 上创建目录、写配对、重新打开。
+tasks.register<JavaExec>("trustTest") {
+    mainClass.set("io.github.gcbond.openhc.pc.TrustSelfTestKt")
+    classpath = sourceSets["main"].runtimeClasspath
+}
+
+// 热点检测自检：需要先手动打开 Windows 移动热点（名字 HiCarlink / 口令 hicarlink123）。
+tasks.register<JavaExec>("hotspotTest") {
+    mainClass.set("io.github.gcbond.openhc.pc.HotspotSelfTestKt")
+    classpath = sourceSets["main"].runtimeClasspath
+}
+
+tasks.register<JavaExec>("aacBisect") {
+    mainClass.set("io.github.gcbond.openhc.pc.AacBisectKt")
     classpath = sourceSets["main"].runtimeClasspath
 }

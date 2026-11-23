@@ -1,7 +1,6 @@
 package io.github.gcbond.openhc.pc
 
 import org.bytedeco.ffmpeg.avcodec.AVCodecContext
-import org.bytedeco.ffmpeg.avcodec.AVPacket
 import org.bytedeco.ffmpeg.avutil.AVFrame
 import org.bytedeco.ffmpeg.global.avcodec.AV_CODEC_ID_AAC
 import org.bytedeco.ffmpeg.global.avcodec.av_new_packet
@@ -21,15 +20,16 @@ import org.bytedeco.ffmpeg.global.avutil.AV_SAMPLE_FMT_S16P
 import org.bytedeco.ffmpeg.global.avutil.av_frame_alloc
 import org.bytedeco.ffmpeg.global.avutil.av_frame_free
 import org.bytedeco.ffmpeg.global.avutil.av_frame_unref
-import org.bytedeco.ffmpeg.avutil.AVChannelLayout
-import org.bytedeco.ffmpeg.global.avutil.av_channel_layout_default
 import org.bytedeco.javacpp.BytePointer
+import org.bytedeco.javacpp.Pointer
 
 /**
  * AAC 解码（avcodec 直解）：手机把声音编成 AAC 时用。
  *
- * 一包 RTP 载荷可能带 ADTS 头，也可能带；首次见到 ADTS 头时按它重建 `AudioSpecificConfig` 作为 extradata
- * （AAC 解码器需要它才能解没有 ADTS 的裸帧）。输出统一是 16 位小端交错 PCM，直接进 Java Sound。
+ * 两个踩过的原生内存坑（都会让 JVM 直接崩，不是抛异常）：
+ * 1. extradata 必须用 `av_malloc` 分配 —— `avcodec_free_context` 会用 ffmpeg 自己的 `av_free` 释放它，
+ *    传 Java 分配的内存进去等于让 ffmpeg 释放野指针；
+ * 2. 采样数据按指针偏移读（`getFloat`），不要用 `asByteBuffer()`：JavaCPP 的容量不可靠，会越界。
  */
 internal class LiveAacDecoder(
     sampleRate: Int,
@@ -38,37 +38,35 @@ internal class LiveAacDecoder(
     private val codec = avcodec_find_decoder(AV_CODEC_ID_AAC)
         ?: throw IllegalStateException("ffmpeg 里没有 AAC 解码器")
     private val ctx: AVCodecContext = avcodec_alloc_context3(codec)
-    private val packet: AVPacket = av_packet_alloc()
     private val frame: AVFrame = av_frame_alloc()
-    private var extradata: BytePointer? = null
+    private var extradataRaw: Pointer? = null
     private var configSet = false
     private var outputRate = sampleRate
     private var outputChannels = channels
-    private val layout = AVChannelLayout()
 
-    /** 解出来一帧对应的采样数与声道（播放端用来开数据线）。 */
     val sampleRate: Int get() = if (ctx.sample_rate() > 0) ctx.sample_rate() else outputRate
     val channelCount: Int get() = if (ctx.ch_layout().nb_channels() > 0) ctx.ch_layout().nb_channels() else outputChannels
 
     init {
         ctx.sample_rate(sampleRate)
-        av_channel_layout_default(layout, channels)
-        ctx.ch_layout(layout)
         setExtradata(AacConfig.audioSpecificConfig(sampleRate, channels))
         check(avcodec_open2(ctx, codec, null as org.bytedeco.ffmpeg.avutil.AVDictionary?) >= 0) { "打开 AAC 解码器失败" }
     }
 
     private fun setExtradata(bytes: ByteArray) {
-        val ptr = BytePointer(bytes.size.toLong())
-        ptr.put(bytes, 0, bytes.size)
-        ptr.position(0)
-        extradata = ptr
-        ctx.extradata(ptr)
+        extradataRaw?.let { org.bytedeco.ffmpeg.global.avutil.av_free(it) }
+        extradataRaw = null
+        val raw = org.bytedeco.ffmpeg.global.avutil.av_malloc(bytes.size.toLong())
+            ?: throw IllegalStateException("给 AAC 解码器分配 extradata 失败")
+        val view = BytePointer(raw)
+        view.put(bytes, 0, bytes.size)
+        extradataRaw = raw
+        ctx.extradata(view)
         ctx.extradata_size(bytes.size)
         configSet = true
     }
 
-    /** 喂一个载荷（可带 ADTS 头），返回 16 位小端交错 PCM；没有解出东西时返回空数组。 */
+    /** 喂一个载荷（可带 ADTS 头），返回 16 位小端交错 PCM；没解出东西时返回空数组。 */
     fun decode(payload: ByteArray, offset: Int = 0, length: Int = payload.size): ByteArray {
         val adts = AacConfig.parseAdts(payload, offset, length)
         val from: Int
@@ -89,19 +87,21 @@ internal class LiveAacDecoder(
         if (size <= 0) return ByteArray(0)
 
         val out = java.io.ByteArrayOutputStream()
-        av_new_packet(packet, size)
-        packet.data().position(0).put(payload, from, size)
-        packet.size(size)
-        if (avcodec_send_packet(ctx, packet) < 0) {
-            av_packet_unref(packet)
-            return ByteArray(0)
+        val pkt = av_packet_alloc()
+        try {
+            av_new_packet(pkt, size)
+            pkt.data().position(0).put(payload, from, size)
+            pkt.size(size)
+            if (avcodec_send_packet(ctx, pkt) < 0) return ByteArray(0)
+        } finally {
+            av_packet_unref(pkt)
+            av_packet_free(pkt)
         }
         while (true) {
             if (avcodec_receive_frame(ctx, frame) < 0) break
             out.write(convertFrame(frame))
             av_frame_unref(frame)
         }
-        av_packet_unref(packet)
         return out.toByteArray()
     }
 
@@ -116,7 +116,7 @@ internal class LiveAacDecoder(
             AV_SAMPLE_FMT_FLTP -> {
                 for (i in 0 until n) {
                     for (c in 0 until ch) {
-                        val v = f.data(c).asByteBuffer().asFloatBuffer().get(i)
+                        val v = f.data(c).getFloat((i * 4).toLong())
                         val s = (v * 32767f).toInt().coerceIn(-32768, 32767)
                         out[o++] = (s and 0xFF).toByte()
                         out[o++] = ((s shr 8) and 0xFF).toByte()
@@ -124,25 +124,23 @@ internal class LiveAacDecoder(
                 }
             }
             AV_SAMPLE_FMT_FLT -> {
-                val fb = f.data(0).asByteBuffer().asFloatBuffer()
+                val plane = f.data(0)
                 for (i in 0 until n * ch) {
-                    val s = (fb.get(i) * 32767f).toInt().coerceIn(-32768, 32767)
+                    val v = plane.getFloat((i * 4).toLong())
+                    val s = (v * 32767f).toInt().coerceIn(-32768, 32767)
                     out[o++] = (s and 0xFF).toByte()
                     out[o++] = ((s shr 8) and 0xFF).toByte()
                 }
             }
             AV_SAMPLE_FMT_S16, AV_SAMPLE_FMT_S16P -> {
-                // 16 位：planar 时逐声道取，交错时直接拷。
                 if (fmt == AV_SAMPLE_FMT_S16) {
                     f.data(0).get(out, 0, out.size)
                 } else {
                     for (i in 0 until n) {
                         for (c in 0 until ch) {
-                            val p = f.data(c)
-                            val lo = p.get((i * 2).toLong()).toInt() and 0xFF
-                            val hi = p.get((i * 2 + 1).toLong()).toInt() and 0xFF
-                            out[o++] = lo.toByte()
-                            out[o++] = hi.toByte()
+                            val plane = f.data(c)
+                            out[o++] = plane.get((i * 2).toLong())
+                            out[o++] = plane.get((i * 2 + 1).toLong())
                         }
                     }
                 }
@@ -154,7 +152,7 @@ internal class LiveAacDecoder(
 
     override fun close() {
         runCatching { av_frame_free(frame) }
-        runCatching { av_packet_free(packet) }
         runCatching { avcodec_free_context(ctx) }
+        extradataRaw = null
     }
 }

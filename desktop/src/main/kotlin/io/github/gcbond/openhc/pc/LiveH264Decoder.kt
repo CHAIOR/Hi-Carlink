@@ -37,7 +37,10 @@ internal class LiveH264Decoder : AutoCloseable {
     private var yPlane = ByteArray(0)
     private var uPlane = ByteArray(0)
     private var vPlane = ByteArray(0)
-    private var pixels = IntArray(0)
+    private val workerCount = Runtime.getRuntime().availableProcessors().coerceIn(2, 8)
+    private val pool = java.util.concurrent.Executors.newFixedThreadPool(workerCount) { r ->
+        Thread(r, "HiCarlink-YUV").apply { isDaemon = true }
+    }
 
     init {
         check(avcodec_open2(ctx, codec, null as org.bytedeco.ffmpeg.avutil.AVDictionary?) >= 0) { "打开 H.264 解码器失败" }
@@ -68,10 +71,7 @@ internal class LiveH264Decoder : AutoCloseable {
         val h = f.height()
         if (w <= 0 || h <= 0) return null
         val fmt = f.format()
-        if (fmt != AV_PIX_FMT_YUV420P && fmt != AV_PIX_FMT_YUVJ420P) {
-            // 其他像素格式（例如 10bit）先不解，交给上层提示。
-            return null
-        }
+        if (fmt != AV_PIX_FMT_YUV420P && fmt != AV_PIX_FMT_YUVJ420P) return null
         val yStride = f.linesize(0)
         val uStride = f.linesize(1)
         val vStride = f.linesize(2)
@@ -86,36 +86,68 @@ internal class LiveH264Decoder : AutoCloseable {
         f.data(1).get(uPlane, 0, uSize)
         f.data(2).get(vPlane, 0, vSize)
 
-        if (pixels.size != w * h) pixels = IntArray(w * h)
-        val pix = pixels
-        for (y in 0 until h) {
+        // 直接写 BufferedImage 自己的 int 像素（TYPE_INT_RGB 是单 bank int[]），省一次整帧拷贝。
+        val img = BufferedImage(w, h, BufferedImage.TYPE_INT_RGB)
+        val out = (img.raster.dataBuffer as java.awt.image.DataBufferInt).data
+        val chunks = minOf(workerCount, maxOf(1, h / 32))
+        if (chunks <= 1) {
+            convertRows(0, h, w, yStride, uStride, vStride, out)
+        } else {
+            val futures = ArrayList<java.util.concurrent.Future<*>>(chunks)
+            for (c in 0 until chunks) {
+                val y0 = h * c / chunks
+                val y1 = h * (c + 1) / chunks
+                futures += pool.submit { convertRows(y0, y1, w, yStride, uStride, vStride, out) }
+            }
+            for (future in futures) {
+                try {
+                    future.get()
+                } catch (e: InterruptedException) {
+                    Thread.currentThread().interrupt()
+                    return null
+                } catch (e: java.util.concurrent.ExecutionException) {
+                    return null
+                }
+            }
+        }
+        return img
+    }
+
+    /** 把第 [y0, y1) 行从 yuv420p 转成 RGB 写进 [out]；多线程各写各的行，不重叠。 */
+    private fun convertRows(
+        y0: Int,
+        y1: Int,
+        w: Int,
+        yStride: Int,
+        uStride: Int,
+        vStride: Int,
+        out: IntArray,
+    ) {
+        for (y in y0 until y1) {
             val yRow = y * yStride
-            val uvRow = (y / 2)
+            val uvRow = y / 2
             val uRow = uvRow * uStride
             val vRow = uvRow * vStride
             var idx = y * w
             for (x in 0 until w) {
                 val yv = yPlane[yRow + x].toInt() and 0xFF
-                val uxv = (uPlane[uRow + (x / 2)].toInt() and 0xFF) - 128
-                val vxv = (vPlane[vRow + (x / 2)].toInt() and 0xFF) - 128
-                var r = yv + (1.402 * vxv).toInt()
-                var g = yv - (0.344136 * uxv).toInt() - (0.714136 * vxv).toInt()
-                var b = yv + (1.772 * uxv).toInt()
+                val ux = (uPlane[uRow + (x / 2)].toInt() and 0xFF) - 128
+                val vx = (vPlane[vRow + (x / 2)].toInt() and 0xFF) - 128
+                var r = yv + (1.402 * vx).toInt()
+                var g = yv - (0.344136 * ux).toInt() - (0.714136 * vx).toInt()
+                var b = yv + (1.772 * ux).toInt()
                 if (r < 0) r = 0 else if (r > 255) r = 255
                 if (g < 0) g = 0 else if (g > 255) g = 255
                 if (b < 0) b = 0 else if (b > 255) b = 255
-                pix[idx++] = (r shl 16) or (g shl 8) or b
+                out[idx++] = (r shl 16) or (g shl 8) or b
             }
         }
-        // 每帧新建一张：界面那边可能在别的线程上画，复用同一张会撕裂。
-        val img = BufferedImage(w, h, BufferedImage.TYPE_INT_RGB)
-        img.setRGB(0, 0, w, h, pix, 0, w)
-        return img
     }
 
     override fun close() {
         runCatching { av_frame_free(frame) }
         runCatching { av_packet_free(packet) }
         runCatching { avcodec_free_context(ctx) }
+        pool.shutdownNow()
     }
 }
