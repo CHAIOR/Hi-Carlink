@@ -48,6 +48,16 @@ class ScreenMappingTest {
     }
 
     @Test
+    fun clickFollowsNormalOrientation() {
+        // 回归：单击不能上下/左右颠倒——左上角点 → 视频 (0,0)，右下角点 → 最后一行一列。
+        val g = ScreenMapping.geometry(1920, 1080, 2560, 1440, fill = false)!!
+        assertEquals(1 to 1, ScreenMapping.toVideo(1f, 1f, g))
+        assertEquals(2558 to 1438, ScreenMapping.toVideo(1919f, 1079f, g))
+        // 正中间就是视频正中间。
+        assertEquals(1280 to 720, ScreenMapping.toVideo(960f, 540f, g))
+    }
+
+    @Test
     fun invalidGeometryReturnsNull() {
         assertNull(ScreenMapping.geometry(0, 720, 1280, 720, fill = false))
         assertNull(ScreenMapping.geometry(1280, 720, 0, 0, fill = true))
