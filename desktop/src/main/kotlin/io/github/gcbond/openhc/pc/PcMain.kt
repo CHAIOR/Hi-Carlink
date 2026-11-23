@@ -235,11 +235,26 @@ internal class PcApp(private val options: PcOptions) {
     }
 
     /** 跑一次无线会话（窗口一直留着）。[reconnect] 不为 null 时走主动回连；返回「回连是否失败」。 */
+    /**
+     * 热点名/口令：命令行显式给了就听命令行的，否则用界面里保存的——
+     * Windows 的移动热点名字/密码是用户自己设的，和默认值不一致时必须用实际值，否则手机会连不上。
+     */
+    private fun hotspotCredentials(): Pair<String, String> {
+        val saved = AppSettings.load()
+        return if (options.explicitNetwork) {
+            options.hotspotSsid to options.hotspotPassword
+        } else {
+            saved.hotspotSsid to saved.hotspotPassword
+        }
+    }
+
     private fun runSession(config: WirelessReceiverConfig, reconnect: Pair<String, String>? = null): Boolean {
         ended = false
         endReason = null
         stage = "等手机扫码"
         window.hideRestart()
+        val (ssid, password) = hotspotCredentials()
+        log("热点：$ssid（密码 ${password.length} 位，以设置里的为准）")
         val fileOut = options.videoOut?.let { out ->
             try {
                 BufferedOutputStream(Files.newOutputStream(out), 1 shl 20)
@@ -271,7 +286,7 @@ internal class PcApp(private val options: PcOptions) {
         }
         val rfcomm = if (isWindows64()) WinRfcommBackend() else UnavailableRfcomm
         val wifi = if (isWindows()) {
-            WinHotspotBackend(options.hotspotSsid, options.hotspotPassword, options.frequencyMhz) { log(it) }
+            WinHotspotBackend(ssid, password, options.frequencyMhz) { log(it) }
         } else {
             UnavailableWifi
         }
@@ -317,6 +332,11 @@ internal class PcApp(private val options: PcOptions) {
         audio.close()
         runCatching { fileOut?.close() }
         log("结束：${endReason ?: "未知"}")
+        val reason = endReason?.toString() ?: ""
+        if (reason.contains("WiFi", ignoreCase = true) || reason.contains("WIFI")) {
+            log("提示：手机没能连到热点上的端口。先核对 设置→热点 里的名字/密码和 Windows「移动热点」是否完全一致；")
+            log("      再确认 Windows 防火墙允许 Java（专用网络），必要时把热点网络设成「专用」。")
+        }
         val reasonText = endReason?.toString() ?: ""
         return reconnect != null && reasonText.contains("主动回连")
     }
@@ -361,7 +381,7 @@ internal class PcApp(private val options: PcOptions) {
                 window.showPairing(event.qrCode, event.pinCode)
                 window.setStatus(
                     "连接码 ${event.pinCode}  手机用 HiCar 扫上面的二维码\n" +
-                        "（连上以后要把 Windows「移动热点」打开：名字 ${options.hotspotSsid}，密码 ${options.hotspotPassword}）",
+                        "（连上以后要把 Windows「移动热点」打开：名字 ${hotspotCredentials().first}，密码就是设置里填的那个，要和 Windows 里显示的完全一致）",
                 )
             }
             is WirelessEvent.PhoneBluetoothConnected -> {
@@ -382,7 +402,7 @@ internal class PcApp(private val options: PcOptions) {
             }
             is WirelessEvent.WifiNetworkReady -> {
                 log("WiFi 网络已开好：${event.frequencyMhz} MHz")
-                stage = "热点已就绪（${options.hotspotSsid}），等手机加入"
+                stage = "热点已就绪（${hotspotCredentials().first}），等手机加入"
                 window.setStatus("热点已开好，等手机连上来…")
             }
             is WirelessEvent.ConnectionInfoSent -> {

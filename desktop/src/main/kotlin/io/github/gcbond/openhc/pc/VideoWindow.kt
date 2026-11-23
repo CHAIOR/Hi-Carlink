@@ -423,6 +423,8 @@ internal class VideoWindow(
         val invertWheel = javax.swing.JCheckBox("滚轮方向反过来（默认：滚轮往下 = 内容往下）").apply {
             isSelected = current.invertWheel
         }
+        val ssidField = javax.swing.JTextField(current.hotspotSsid, 14)
+        val passField = javax.swing.JPasswordField(current.hotspotPassword, 14)
         val fullscreenFit = javax.swing.JCheckBox("全屏时完整显示（画面比例和屏幕不同时留黑边，不裁切）").apply {
             isSelected = current.fullscreenFit
         }
@@ -435,6 +437,13 @@ internal class VideoWindow(
             add(resolutions)
             add(JLabel("帧率"))
             add(fpsBox)
+        }
+        val networkForm = JPanel(GridLayout(2, 2, 12, 8)).apply {
+            border = BorderFactory.createEmptyBorder(4, 20, 8, 20)
+            add(JLabel("热点名称"))
+            add(ssidField)
+            add(JLabel("热点密码"))
+            add(passField)
         }
         val inputForm = JPanel(GridLayout(3, 1, 12, 8)).apply {
             border = BorderFactory.createEmptyBorder(4, 20, 8, 20)
@@ -455,6 +464,8 @@ internal class VideoWindow(
                             invertWheel = invertWheel.isSelected,
                             fullscreenFit = fullscreenFit.isSelected,
                             matchScreenAspect = matchAspect.isSelected,
+                            hotspotSsid = ssidField.text.trim(),
+                            hotspotPassword = String(passField.password),
                         )
                         AppSettings.save(settings)
                         inputSettings = settings
@@ -471,6 +482,10 @@ internal class VideoWindow(
             add(videoForm)
             add(JLabel("键鼠").apply { border = BorderFactory.createEmptyBorder(8, 20, 0, 0) })
             add(inputForm)
+            add(JLabel("热点（和 Windows「移动热点」里显示的名字/密码一致）").apply {
+                border = BorderFactory.createEmptyBorder(8, 20, 0, 0)
+            })
+            add(networkForm)
         }
         dialog.add(center, BorderLayout.CENTER)
         dialog.add(buttons, BorderLayout.SOUTH)

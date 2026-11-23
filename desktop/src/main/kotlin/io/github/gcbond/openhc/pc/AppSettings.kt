@@ -32,6 +32,10 @@ internal data class AppSettings(
     val fullscreenFit: Boolean = true,
     /** 分辨率按屏幕比例算（全屏正好铺满，不裁也不留黑边）。 */
     val matchScreenAspect: Boolean = false,
+    /** Windows 移动热点的名称。 */
+    val hotspotSsid: String = "HiCarlink",
+    /** Windows 移动热点的口令（Windows 里显示的“网络密码”）。 */
+    val hotspotPassword: String = "hicarlink123",
 ) {
     val preset: VideoPreset get() = VideoPresets.byName(resolution) ?: VideoPresets.TWO_K
 
@@ -70,6 +74,8 @@ internal data class AppSettings(
                     middleButton = p.getProperty("middleButton") ?: "home",
                     fullscreenFit = p.getProperty("fullscreenFit")?.toBoolean() ?: true,
                     matchScreenAspect = p.getProperty("matchScreenAspect")?.toBoolean() ?: false,
+                    hotspotSsid = p.getProperty("hotspotSsid") ?: "HiCarlink",
+                    hotspotPassword = p.getProperty("hotspotPassword") ?: "hicarlink123",
                 )
             }.getOrDefault(AppSettings())
         }
@@ -86,6 +92,8 @@ internal data class AppSettings(
                     setProperty("middleButton", settings.middleButton)
                     setProperty("fullscreenFit", settings.fullscreenFit.toString())
                     setProperty("matchScreenAspect", settings.matchScreenAspect.toString())
+                    setProperty("hotspotSsid", settings.hotspotSsid)
+                    setProperty("hotspotPassword", settings.hotspotPassword)
                 }.store(f.outputStream(), "Hi Carlink PC settings")
             }
         }

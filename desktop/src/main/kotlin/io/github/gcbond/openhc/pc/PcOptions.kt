@@ -27,6 +27,8 @@ internal class PcOptions(
     val fullscreen: Boolean = false,
     /** 命令行里显式给了分辨率/帧率（给了就以命令行为准，否则用界面里保存的设置）。 */
     val explicitVideo: Boolean = false,
+    /** 命令行里显式给了 --ssid/--password。 */
+    val explicitNetwork: Boolean = false,
     /** 诊断：把蓝牙收发原始字节写到这个目录。 */
     val dumpBtDir: String? = null,
 ) {
@@ -67,6 +69,7 @@ internal class PcOptions(
             var density = 2.0
             var fullscreen = false
             var explicitVideo = false
+            var explicitNetwork = false
             var i = 0
             fun value(name: String): String {
                 if (i + 1 >= args.size) throw IllegalArgumentException("$name 后面要跟一个值")
@@ -78,8 +81,8 @@ internal class PcOptions(
                     "--identity" -> identity = Path.of(value(a))
                     "--trust-dir" -> trustDir = Path.of(value(a))
                     "--bt" -> bt = value(a)
-                    "--ssid" -> ssid = value(a)
-                    "--password" -> password = value(a)
+                    "--ssid" -> { ssid = value(a); explicitNetwork = true }
+                    "--password" -> { password = value(a); explicitNetwork = true }
                     "--width" -> { width = value(a).toIntOrNull() ?: throw IllegalArgumentException("--width 要是整数"); explicitVideo = true }
                     "--height" -> { height = value(a).toIntOrNull() ?: throw IllegalArgumentException("--height 要是整数"); explicitVideo = true }
                     "--fps" -> { fps = value(a).toIntOrNull() ?: throw IllegalArgumentException("--fps 要是整数"); explicitVideo = true }
@@ -113,6 +116,7 @@ internal class PcOptions(
                 density = density,
                 fullscreen = fullscreen,
                 explicitVideo = explicitVideo,
+                explicitNetwork = explicitNetwork,
             )
         }
     }
