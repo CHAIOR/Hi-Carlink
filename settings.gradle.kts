@@ -37,6 +37,9 @@ include(":platform")
 // 应用本体。
 include(":app")
 
+// Windows 版无线接收端（实验，复用 core:session）。
+include(":desktop")
+
 // 开发工具：在电脑的 JVM 上直接连真手机跑完整会话（不打进安装包）。
 include(":tools:desktop")
 // 真机实测用的小工具，不进应用本体。

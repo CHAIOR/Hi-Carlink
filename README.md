@@ -14,6 +14,18 @@
 
 ---
 
+
+## Windows 电脑版（实验，`desktop/` 模块）
+
+同一套协议实现（`core:session`）移植到 Windows：手机扫码 → 蓝牙 RFCOMM 握手与认证 → 电脑「移动热点」→ TCP 会话
+→ H.264 解码上屏（JavaCV/ffmpeg）+ 鼠标触摸回传 + PCM 声音。
+
+- 运行：Releases 里的 `HiCarlinkPC-win64.zip`，解压后双击 `HiCarlinkPC.bat`（自带 Java 运行时，不用装 JDK）
+- 需要：Win10/11 x64、蓝牙和 Wi-Fi 都打开、电脑能上网（Windows 开热点要求有网络配置）
+- 平台实现：`WinRfcomm`（JNA 调 Winsock `AF_BTH`，注意 `SOCKADDR_BTH` 是 30 字节 pack(1) 布局）、
+  `WinHotspot`（PowerShell + WinRT `NetworkOperatorTetheringManager`）、`VideoWindow`（JavaCV 解码 + Swing + 触摸）
+- 已知限制：AAC 声音未接（向手机声明 PCM）、鼠标只有单指、Windows 热点固定在 2.4 GHz
+
 ## 为什么上游不支持 6.0
 
 无线连接这条路是：**车机开一个本地热点 → 手机连上来 → 走 TCP 传控制与视频**。

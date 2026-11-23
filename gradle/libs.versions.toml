@@ -14,6 +14,8 @@ junit = "4.13.2"
 bouncycastle = "1.79"
 # 无线连接页的二维码（只用编码部分）。
 zxing = "3.5.3"
+# Windows 蓝牙（Winsock AF_BTH）、系统调用。
+jna = "5.19.1"
 animalsniffer = "2.0.1"
 # 核心模块要能跑在安卓 6.0 上：用安卓 API 23 的签名检查有没有误用新版 JDK 接口。
 androidApi23Signature = "6.0_r3"
@@ -23,6 +25,7 @@ kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-cor
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serialization" }
 bouncycastle-prov = { group = "org.bouncycastle", name = "bcprov-jdk18on", version.ref = "bouncycastle" }
 zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
+jna = { module = "net.java.dev.jna:jna", version.ref = "jna" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
 androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
