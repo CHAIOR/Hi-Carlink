@@ -148,11 +148,12 @@ internal class PcApp(private val options: PcOptions) {
         // 画质：命令行显式给了就听命令行的，否则用界面里保存的设置（默认 2K60）。
         val settings = AppSettings.load()
         val preset = settings.preset
-        val width = if (options.explicitVideo) options.width else preset.width
-        val height = if (options.explicitVideo) options.height else preset.height
+        val screenSized = if (options.explicitVideo) null else if (settings.matchScreenAspect) AppSettings.sizeForScreen(preset) else null
+        val width = if (options.explicitVideo) options.width else (screenSized?.first ?: preset.width)
+        val height = if (options.explicitVideo) options.height else (screenSized?.second ?: preset.height)
         val fps = if (options.explicitVideo) options.fps else settings.fps
-        val dpi = if (options.explicitVideo) options.dpi else preset.dpi
-        val density = if (options.explicitVideo) options.density else preset.density
+        val dpi = if (options.explicitVideo) options.dpi else (screenSized?.let { (it.second * 160) / 720 } ?: preset.dpi)
+        val density = if (options.explicitVideo) options.density else (screenSized?.let { it.second / 720.0 } ?: preset.density)
         log("画质：${width}x$height@$fps（dpi $dpi / density $density）")
         val display = DisplaySettings(width, height, fps, dpi, density)
         val config = try {

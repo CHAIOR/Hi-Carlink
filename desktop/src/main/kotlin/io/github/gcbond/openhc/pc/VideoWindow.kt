@@ -426,6 +426,9 @@ internal class VideoWindow(
         val fullscreenFit = javax.swing.JCheckBox("全屏时完整显示（画面比例和屏幕不同时留黑边，不裁切）").apply {
             isSelected = current.fullscreenFit
         }
+        val matchAspect = javax.swing.JCheckBox("分辨率跟随屏幕比例（全屏正好铺满，不裁不留边，下次重新开始生效）").apply {
+            isSelected = current.matchScreenAspect
+        }
         val videoForm = JPanel(GridLayout(2, 2, 12, 12)).apply {
             border = BorderFactory.createEmptyBorder(16, 20, 4, 20)
             add(JLabel("分辨率"))
@@ -433,12 +436,11 @@ internal class VideoWindow(
             add(JLabel("帧率"))
             add(fpsBox)
         }
-        val inputForm = JPanel(GridLayout(2, 2, 12, 12)).apply {
+        val inputForm = JPanel(GridLayout(3, 1, 12, 8)).apply {
             border = BorderFactory.createEmptyBorder(4, 20, 8, 20)
-            add(JLabel("滚轮"))
             add(invertWheel)
-            add(JLabel("全屏"))
             add(fullscreenFit)
+            add(matchAspect)
         }
         val buttons = JPanel(FlowLayout(FlowLayout.RIGHT)).apply {
             add(JButton("取消").apply { addActionListener { dialog.dispose() } })
@@ -452,6 +454,7 @@ internal class VideoWindow(
                             fps = chosenFps,
                             invertWheel = invertWheel.isSelected,
                             fullscreenFit = fullscreenFit.isSelected,
+                            matchScreenAspect = matchAspect.isSelected,
                         )
                         AppSettings.save(settings)
                         inputSettings = settings

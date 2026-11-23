@@ -30,11 +30,28 @@ internal data class AppSettings(
     val middleButton: String = "home",
     /** 全屏时完整显示画面（必要时留黑边）；false = 裁切铺满。 */
     val fullscreenFit: Boolean = true,
+    /** 分辨率按屏幕比例算（全屏正好铺满，不裁也不留黑边）。 */
+    val matchScreenAspect: Boolean = false,
 ) {
     val preset: VideoPreset get() = VideoPresets.byName(resolution) ?: VideoPresets.TWO_K
 
     companion object {
         val FPS_CHOICES = listOf(30, 60)
+
+        /** 屏幕宽高（拿不到时按 16:9）。 */
+        fun screenAspect(): Double = try {
+            val size = java.awt.Toolkit.getDefaultToolkit().screenSize
+            if (size.width > 0 && size.height > 0) size.width.toDouble() / size.height else 16.0 / 9.0
+        } catch (e: Exception) {
+            16.0 / 9.0
+        }
+
+        /** 按屏幕比例把预设高度换算成宽高（宽取 8 的倍数，编码器喜欢）。 */
+        fun sizeForScreen(preset: VideoPreset): Pair<Int, Int> {
+            val aspect = screenAspect()
+            val width = ((preset.height * aspect / 8.0).toInt() * 8).coerceAtLeast(640)
+            return width to preset.height
+        }
 
         fun file(): File = File(System.getProperty("user.home"), ".hi-carlink/settings.properties")
 
@@ -52,6 +69,7 @@ internal data class AppSettings(
                     rightButton = p.getProperty("rightButton") ?: "back",
                     middleButton = p.getProperty("middleButton") ?: "home",
                     fullscreenFit = p.getProperty("fullscreenFit")?.toBoolean() ?: true,
+                    matchScreenAspect = p.getProperty("matchScreenAspect")?.toBoolean() ?: false,
                 )
             }.getOrDefault(AppSettings())
         }
@@ -67,6 +85,7 @@ internal data class AppSettings(
                     setProperty("rightButton", settings.rightButton)
                     setProperty("middleButton", settings.middleButton)
                     setProperty("fullscreenFit", settings.fullscreenFit.toString())
+                    setProperty("matchScreenAspect", settings.matchScreenAspect.toString())
                 }.store(f.outputStream(), "Hi Carlink PC settings")
             }
         }
