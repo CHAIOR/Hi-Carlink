@@ -183,6 +183,8 @@ internal class PcApp(private val options: PcOptions) {
             {
                 log("窗口被关掉，结束会话")
                 windowClosed = true
+                // 如果正停在「重新开始」的等待上，也要把它放出来，否则进程会在窗口消失后继续挂着。
+                restartRequested?.countDown()
                 if (this::runner.isInitialized) runner.stop()
             },
             initialFullscreen = options.fullscreen,

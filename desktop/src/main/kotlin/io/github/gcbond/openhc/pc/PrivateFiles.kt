@@ -30,14 +30,21 @@ internal object PrivateFiles {
         val dir = target.toAbsolutePath().parent ?: throw IOException("没有上级目录: $target")
         val temp = dir.resolve(".${target.fileName}.tmp-${System.nanoTime()}")
         try {
-            FileChannel.open(
-                temp,
-                setOf(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE),
-                PosixFilePermissions.asFileAttribute(OWNER_ONLY_FILE),
-            ).use { channel ->
+            val channel = if (POSIX) {
+                FileChannel.open(
+                    temp,
+                    setOf(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE),
+                    PosixFilePermissions.asFileAttribute(OWNER_ONLY_FILE),
+                )
+            } else {
+                // Windows 没有 POSIX 权限位：带 posix 初始属性会抛 UnsupportedOperationException，
+                // 首次配对就会报 SAVE_LTPK_FAILED(31)。
+                FileChannel.open(temp, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE)
+            }
+            channel.use { ch ->
                 val buffer = ByteBuffer.wrap(bytes)
-                while (buffer.hasRemaining()) channel.write(buffer)
-                channel.force(true)
+                while (buffer.hasRemaining()) ch.write(buffer)
+                ch.force(true)
             }
             Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
         } catch (e: IOException) {
