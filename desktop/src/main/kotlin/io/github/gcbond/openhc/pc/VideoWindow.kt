@@ -19,8 +19,6 @@ import java.awt.event.MouseEvent
 import java.awt.event.WindowAdapter
 import java.awt.event.WindowEvent
 import java.awt.image.BufferedImage
-import java.io.PipedInputStream
-import java.io.PipedOutputStream
 import javax.swing.JFrame
 import javax.swing.JPanel
 import javax.swing.SwingUtilities
@@ -51,8 +49,8 @@ internal class VideoWindow(
     private var viewport: VideoViewport? = null
     private val fingers = HashMap<Int, IntArray>() // 鼠标只有一根指针；以后接触摸屏再用
 
-    private val pipeOut = PipedOutputStream()
-    private val pipeIn = PipedInputStream(pipeOut, 16 shl 20)
+    /** 待解码的访问单元：协议线程放，解码线程取；最多压 60 帧，满了丢最旧的，绝不阻塞收包。 */
+    private val units = java.util.concurrent.ArrayBlockingQueue<ByteArray>(60)
     private var running = true
 
     private val panel = object : JPanel() {
@@ -119,6 +117,26 @@ internal class VideoWindow(
 
     fun show() = SwingUtilities.invokeLater { window.isVisible = true }
 
+    /** 把当前窗口画面抓成图片（自检、截图用）。 */
+    fun snapshot(): BufferedImage? {
+        var out: BufferedImage? = null
+        val done = java.util.concurrent.CountDownLatch(1)
+        SwingUtilities.invokeLater {
+            val w = panel.width
+            val h = panel.height
+            if (w > 0 && h > 0) {
+                val img = BufferedImage(w, h, BufferedImage.TYPE_INT_RGB)
+                val g = img.createGraphics()
+                panel.paint(g)
+                g.dispose()
+                out = img
+            }
+            done.countDown()
+        }
+        done.await(2, java.util.concurrent.TimeUnit.SECONDS)
+        return out
+    }
+
     fun setStatus(text: String) = SwingUtilities.invokeLater {
         status = text
         panel.repaint()
@@ -137,55 +155,53 @@ internal class VideoWindow(
 
     // ---------------------------------------------------------------- 视频
 
-    override fun onAccessUnit(unit: AccessUnit) {
-        if (!running) return
-        try {
-            pipeOut.write(unit.data, unit.offset, unit.length)
-        } catch (e: Exception) {
-            // 管道那头关了（窗口已经关掉）：之后不再写。
-            running = false
+    override fun onAccessUnit(unit: AccessUnit) = feed(unit.data, unit.offset, unit.length)
+
+    /** 喂一个 Annex-B 访问单元（一帧）。队列满了就丢最旧的。 */
+    fun feed(data: ByteArray, offset: Int, length: Int) {
+        if (!running || length <= 0) return
+        val unit = data.copyOfRange(offset, offset + length)
+        while (!units.offer(unit)) {
+            units.poll() ?: break
         }
     }
 
     private fun startDecoder() {
         Thread({
-            val converter = Java2DFrameConverter()
-            try {
-                val grabber = FFmpegFrameGrabber(pipeIn).apply {
-                    format = "h264"
-                    setOption("fflags", "nobuffer")
-                    setOption("flags", "low_delay")
-                }
-                grabber.start()
-                while (running) {
-                    val frame = try {
-                        grabber.grabImage()
-                    } catch (e: Exception) {
-                        if (!running) break
-                        setStatus("解码出错：${e.javaClass.simpleName}：${e.message}")
-                        Thread.sleep(200)
-                        null
-                    }
-                    if (frame == null) {
-                        Thread.sleep(5)
-                        continue
-                    }
-                    val img = converter.getBufferedImage(frame)
-                    if (img != null) {
-                        image = img
-                        if (img.width != videoWidth || img.height != videoHeight) {
-                            videoWidth = img.width
-                            videoHeight = img.height
-                            SwingUtilities.invokeLater { refreshViewport() }
-                        }
-                        panel.repaint()
-                    }
-                }
-                grabber.stop()
-                grabber.release()
+            val decoder = try {
+                LiveH264Decoder()
             } catch (e: Exception) {
-                setStatus("解码器启动失败：${e.javaClass.simpleName}：${e.message}")
+                println("[视频] 解码器启动失败：${e.javaClass.simpleName}：${e.message}")
+                setStatus("解码器启动失败：${e.message}")
+                return@Thread
             }
+            println("[视频] 解码器已启动")
+            var frames = 0
+            while (running) {
+                val unit = try {
+                    units.take()
+                } catch (e: InterruptedException) {
+                    break
+                }
+                val images = try {
+                    decoder.decode(unit)
+                } catch (e: Exception) {
+                    println("[视频] 解码出错：${e.javaClass.simpleName}：${e.message}")
+                    continue
+                }
+                for (img in images) {
+                    image = img
+                    frames++
+                    if (frames == 1) println("[视频] 第一帧画面 ${img.width}x${img.height}")
+                    if (img.width != videoWidth || img.height != videoHeight) {
+                        videoWidth = img.width
+                        videoHeight = img.height
+                        SwingUtilities.invokeLater { refreshViewport() }
+                    }
+                }
+                if (images.isNotEmpty()) panel.repaint()
+            }
+            decoder.close()
         }, "HiCarlink-Decoder").apply { isDaemon = true }.start()
     }
 
@@ -224,7 +240,7 @@ internal class VideoWindow(
     override fun close() {
         running = false
         SwingUtilities.invokeLater { window.dispose() }
-        runCatching { pipeOut.close() }
+        units.clear()
     }
 
     private fun qrImage(text: String): BufferedImage {

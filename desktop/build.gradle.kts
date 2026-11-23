@@ -31,3 +31,23 @@ tasks.register<JavaExec>("selftest") {
     mainClass.set("io.github.gcbond.openhc.pc.RfcommSelfTestKt")
     classpath = sourceSets["main"].runtimeClasspath
 }
+
+// 视频管线自检：现场编码一段 H.264，喂进解码器，抓窗口截图存成 PNG。
+tasks.register<JavaExec>("videoTest") {
+    mainClass.set("io.github.gcbond.openhc.pc.VideoSelfTestKt")
+    classpath = sourceSets["main"].runtimeClasspath
+    systemProperty("openhc.snapshot", layout.projectDirectory.file("build/video-selftest.png").asFile.absolutePath)
+}
+
+// 解码器自检：现场编码一段 H.264，再解出来数帧。
+tasks.register<JavaExec>("decodeTest") {
+    mainClass.set("io.github.gcbond.openhc.pc.DecodeSelfTestKt")
+    classpath = sourceSets["main"].runtimeClasspath
+}
+
+// 直播解码器自检：按访问单元喂 avcodec，统计帧数与耗时。
+tasks.register<JavaExec>("avcodecTest") {
+    mainClass.set("io.github.gcbond.openhc.pc.AvcodecSelfTestKt")
+    classpath = sourceSets["main"].runtimeClasspath
+    workingDir = projectDir
+}
