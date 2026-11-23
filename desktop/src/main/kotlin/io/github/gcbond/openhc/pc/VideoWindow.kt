@@ -411,6 +411,12 @@ internal class VideoWindow(
         val middleBox = JComboBox(arrayOf("返回", "桌面", "最近任务", "不设置")).apply {
             selectedIndex = listOf("back", "home", "recents", "none").indexOf(current.middleButton).coerceAtLeast(0)
         }
+        val invertX = javax.swing.JCheckBox("左右反（画面左右和鼠标不一致时勾）").apply {
+            isSelected = current.invertX
+        }
+        val invertY = javax.swing.JCheckBox("上下反").apply {
+            isSelected = current.invertY
+        }
         val videoForm = JPanel(GridLayout(2, 2, 12, 12)).apply {
             border = BorderFactory.createEmptyBorder(16, 20, 4, 20)
             add(JLabel("分辨率"))
@@ -418,7 +424,7 @@ internal class VideoWindow(
             add(JLabel("帧率"))
             add(fpsBox)
         }
-        val inputForm = JPanel(GridLayout(3, 2, 12, 12)).apply {
+        val inputForm = JPanel(GridLayout(4, 2, 12, 12)).apply {
             border = BorderFactory.createEmptyBorder(4, 20, 8, 20)
             add(JLabel("鼠标右键"))
             add(rightBox)
@@ -426,6 +432,12 @@ internal class VideoWindow(
             add(middleBox)
             add(JLabel("滚轮"))
             add(invertWheel)
+            add(JLabel("坐标"))
+            add(JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+                isOpaque = false
+                add(invertX)
+                add(invertY)
+            })
         }
         val buttons = JPanel(FlowLayout(FlowLayout.RIGHT)).apply {
             add(JButton("取消").apply { addActionListener { dialog.dispose() } })
@@ -440,6 +452,8 @@ internal class VideoWindow(
                             invertWheel = invertWheel.isSelected,
                             rightButton = listOf("back", "home", "recents", "none")[rightBox.selectedIndex],
                             middleButton = listOf("back", "home", "recents", "none")[middleBox.selectedIndex],
+                            invertX = invertX.isSelected,
+                            invertY = invertY.isSelected,
                         )
                         AppSettings.save(settings)
                         inputSettings = settings
@@ -533,8 +547,7 @@ internal class VideoWindow(
     }
 
     private fun scroll(x: Float, y: Float, direction: Int) {
-        val geometry = ScreenMapping.geometry(videoPanel.width, videoPanel.height, videoWidth, videoHeight, fullscreen) ?: return
-        val (vx, vy) = ScreenMapping.toVideo(x, y, geometry)
+        val (vx, vy) = toVideo(x, y) ?: return
         val dx = maxOf(40, videoWidth / 20)
         val from = vy.coerceIn(0, videoHeight - 1)
         val to = (from + direction * WHEEL_STEP_PX).coerceIn(0, videoHeight - 1)
@@ -553,9 +566,18 @@ internal class VideoWindow(
         touchDown = false
     }
 
+    /** 窗口坐标 → 视频像素，按设置翻转 X/Y。 */
+    private fun toVideo(x: Float, y: Float): Pair<Int, Int>? {
+        val geometry = ScreenMapping.geometry(videoPanel.width, videoPanel.height, videoWidth, videoHeight, fullscreen)
+            ?: return null
+        var (vx, vy) = ScreenMapping.toVideo(x, y, geometry)
+        if (inputSettings.invertX) vx = videoWidth - 1 - vx
+        if (inputSettings.invertY) vy = videoHeight - 1 - vy
+        return vx to vy
+    }
+
     private fun send(action: HiSightInput.Touch.Action, x: Float, y: Float) {
-        val geometry = ScreenMapping.geometry(videoPanel.width, videoPanel.height, videoWidth, videoHeight, fullscreen) ?: return
-        val (vx, vy) = ScreenMapping.toVideo(x, y, geometry)
+        val (vx, vy) = toVideo(x, y) ?: return
         onTouch(HiSightInput.Touch(action, listOf(HiSightInput.Point(0, vx, vy)), videoWidth, videoHeight))
     }
 
