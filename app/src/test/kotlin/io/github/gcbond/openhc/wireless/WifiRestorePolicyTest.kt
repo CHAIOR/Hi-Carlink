@@ -84,12 +84,13 @@ class WifiRestorePolicyTest {
     }
 
     @Test
-    fun hotspotNeedsAndroid8() {
+    fun hotspotFromAndroid6() {
         assertEquals(true, WirelessNetworkPlan.hotspotSupported(26))
         assertEquals(true, WirelessNetworkPlan.hotspotSupported(36))
-        // 安卓 8.0 以下没有本地热点：用不了无线连接。
-        assertEquals(false, WirelessNetworkPlan.hotspotSupported(25))
-        assertEquals(false, WirelessNetworkPlan.hotspotSupported(23))
+        // 安卓 6.0～7.1 用旧版隐藏接口开热点（见 LegacyHotspot）：能不能开由 ROM 决定，开不了只影响无线。
+        assertEquals(true, WirelessNetworkPlan.hotspotSupported(25))
+        assertEquals(true, WirelessNetworkPlan.hotspotSupported(23))
+        assertEquals(false, WirelessNetworkPlan.hotspotSupported(22))
     }
 
     @Test

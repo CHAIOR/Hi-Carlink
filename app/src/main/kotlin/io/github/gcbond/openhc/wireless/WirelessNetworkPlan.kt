@@ -12,8 +12,11 @@ import io.github.gcbond.openhc.core.session.WirelessTimeouts
  * - 开热点的时限 15 秒：含两次开热点之间至少 3.5 秒的间隔、等热点网卡出现地址。
  */
 object WirelessNetworkPlan {
-    /** 本地热点的系统接口从安卓 8.0（API 26）起才有。 */
-    const val HOTSPOT_MIN_SDK = 26
+    /**
+     * 能开热点的最低安卓版本。安卓 8.0（API 26）起用系统公开的本地热点接口；安卓 6.0～7.1（API 23～25）
+     * 走旧版隐藏接口（见 `LegacyHotspot`，不能用的 ROM 会在开热点时报出来，不影响有线）。
+     */
+    const val HOTSPOT_MIN_SDK = 23
 
     /** 开热点的时限：间隔最多 3.5 秒 + 系统开热点（实测一两秒）+ 等网卡地址最多 3 秒，再留余量。 */
     const val HOTSPOT_NETWORK_START_MILLIS = 15_000L

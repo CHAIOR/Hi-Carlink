@@ -78,8 +78,9 @@ interface LocalHotspotHandle {
 // 权限由调用方在开始前确认（见类注释）；没有时系统拒绝申请或回失败，都按失败报。
 @SuppressLint("MissingPermission")
 class LocalHotspotOwner private constructor(context: Context) {
-    /** 安卓 7.0 以前用界面 Context 取 WifiManager 会泄漏，统一从应用 Context 取；本对象不另外持有 Context。 */
-    private val wifi: WifiManager? = (context.applicationContext ?: context).getSystemService(Context.WIFI_SERVICE) as? WifiManager
+    /** 安卓 7.0 以前用界面 Context 取 WifiManager 会泄漏，统一从应用 Context 取；只留应用 Context（进程级，不会泄漏界面）。 */
+    private val app: Context = context.applicationContext ?: context
+    private val wifi: WifiManager? = app.getSystemService(Context.WIFI_SERVICE) as? WifiManager
     private val thread = HandlerThread("OpenHC-Hotspot").also { it.start() }
     private val handler = Handler(thread.looper)
 
@@ -176,6 +177,18 @@ class LocalHotspotOwner private constructor(context: Context) {
         private var wlanFallbackAt = 0L
         private val poll = Runnable { pollAddress() }
 
+        /** 旧版接口（安卓 6.0～7.1）没有「热点被收回」的回调，只能隔一会儿问一次状态。 */
+        private val lostWatch = object : Runnable {
+            override fun run() {
+                if (stopped || stage != Stage.READY) return
+                if (!LegacyHotspot.isEnabled(wifi)) {
+                    lose("热点被系统关了（车机设置里关了热点，或者被别的应用抢走）")
+                    return
+                }
+                handler.postDelayed(this, LOST_POLL_MS)
+            }
+        }
+
         override fun start() {
             handler.post {
                 if (stopped || stage != Stage.NEW) return@post
@@ -194,6 +207,7 @@ class LocalHotspotOwner private constructor(context: Context) {
                 if (stage == Stage.ENDED && !runs.containsKey(id)) return@post
                 stage = Stage.ENDED
                 handler.removeCallbacks(poll)
+                handler.removeCallbacks(lostWatch)
                 runs.remove(id)
                 val finish = Runnable {
                     draining.remove(id)
@@ -256,6 +270,7 @@ class LocalHotspotOwner private constructor(context: Context) {
                     "车机 WiFi 现在${if (stationEnabled()) "开着" else "关着"}（当前连接 ${stationFrequency()} MHz）",
             )
             if (!stopped) events.onReady(hotspot)
+            if (LegacyHotspot.supported()) handler.postDelayed(lostWatch, LOST_POLL_MS)
         }
 
         fun fail(message: String) {
@@ -317,7 +332,10 @@ class LocalHotspotOwner private constructor(context: Context) {
     /** 申请热点。申请前拍网卡快照（认热点网卡用）、记下车机 WiFi 开没开（恢复 WiFi 用）。 */
     private fun requestNow() {
         lastFailure = null
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return rejected("安卓 8.0 以下没有本地热点")
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
+            if (LegacyHotspot.supported()) return requestLegacy()
+            return rejected("安卓 8.0 以下没有本地热点")
+        }
         val manager = wifi ?: return rejected("拿不到系统的 WiFi 服务")
         before = snapshot()
         infoWatcher?.reset()
@@ -361,6 +379,29 @@ class LocalHotspotOwner private constructor(context: Context) {
         } finally {
             returned.set(true)
             watchHandler.removeCallbacks(watchdog)
+        }
+    }
+
+    /**
+     * 安卓 6.0～7.1：系统没有公开的本地热点接口，用旧版隐藏接口开（见 [LegacyHotspot]）。开起来以后走和
+     * 系统热点同一条路：读配置、等网卡上出现地址、再交给连接。
+     */
+    private fun requestLegacy() {
+        val manager = wifi ?: return rejected("拿不到系统的 WiFi 服务")
+        before = snapshot()
+        val stationOn = stationEnabled()
+        if (stationOn) stationNote = true
+        note("向系统申请热点（安卓 ${Build.VERSION.SDK_INT}，旧版接口；车机 WiFi ${if (stationOn) "开着" else "关着"}）")
+        val calledAt = now()
+        LegacyHotspot.enableAsync(manager, app, handler) { result ->
+            when (result) {
+                is LegacyHotspot.EnableResult.Ok -> {
+                    note("系统把热点开起来了（用时 ${now() - calledAt} 毫秒）")
+                    reservation = result.lease
+                    drive { machine.onStarted(now()) }
+                }
+                is LegacyHotspot.EnableResult.Failed -> rejected(result.message)
+            }
         }
     }
 
@@ -418,6 +459,11 @@ class LocalHotspotOwner private constructor(context: Context) {
     }
 
     private fun closeQuietly(held: Any) {
+        // 安卓 6.0～7.1 走旧版接口：拿同一个配置把热点关了。
+        if (held is LegacyHotspotLease) {
+            LegacyHotspot.disable(wifi, held)
+            return
+        }
         // 只有安卓 8.0 起才会拿到系统给的热点。
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         try {
@@ -448,6 +494,17 @@ class LocalHotspotOwner private constructor(context: Context) {
 
     private fun readReservation(held: Any): ReservationInfo {
         val unknown = ReservationInfo(null, null, null, HotspotSecurity.UNKNOWN, null)
+        if (held is LegacyHotspotLease) {
+            return ReservationInfo(
+                ssid = held.ssid,
+                passphrase = held.passphrase,
+                // 旧系统读不到热点的 BSSID，交给 pickBssid 用热点网卡的硬件地址或占位值。
+                bssid = null,
+                security = HotspotSecurity.OK,
+                // 旧版的 WifiConfiguration 没有频段、信道字段，按 2.4 GHz 第 6 信道推测。
+                hint = null,
+            )
+        }
         // 只有安卓 8.0 起才会拿到系统给的热点。
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return unknown
         val reservation = held as? WifiManager.LocalOnlyHotspotReservation ?: return unknown
@@ -577,6 +634,9 @@ class LocalHotspotOwner private constructor(context: Context) {
 
         /** 停掉后过这么久才关热点：让会话收尾时最后几个包先发出去。 */
         const val STOP_DRAIN_MS = 200L
+
+        /** 旧版接口的热点开着时，隔这么久问一次系统它还在不在。 */
+        const val LOST_POLL_MS = 3_000L
 
         private const val MIN_GAP_TEXT = "3.5 秒"
 

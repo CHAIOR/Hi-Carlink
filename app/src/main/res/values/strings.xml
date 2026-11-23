@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">OpenHC</string>
+    <string name="app_name">Hi Carlink</string>
     <string name="home_tagline">开源的华为手机投屏接收端，装在车机上使用。与华为、比亚迪等公司无关。</string>
     <string name="home_version">版本 %1$s</string>
 

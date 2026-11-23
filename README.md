@@ -1,98 +1,85 @@
-# OpenHC
+# OpenHC · Android 6 无线适配版
 
-**开源的 HiCar 车机端。** 装在安卓车机上，华为手机用数据线或无线投屏到车机屏幕。
+把上游开源车机端 [GGBondLab/OpenHC](https://github.com/GGBondLab/OpenHC)（0.2.2）适配到 **Android 6.0～7.1**：
+上游的无线投屏要求 Android 8.0+（因为 `WifiManager.startLocalOnlyHotspot` 是 API 26 才有的公开接口），
+这个分支补了一条旧版隐藏接口的热点实现，让 6.0 车机也能无线投屏。
 
-[下载安装包](https://github.com/GGBondLab/OpenHC/releases/latest) · [更新记录](CHANGELOG.md) · [报告问题](https://github.com/GGBondLab/OpenHC/issues) · [从源码构建](#构建)
+- 🏷️ **显示名**：启动器里叫 **Hi Carlink**；包名仍是 `io.github.gcbond.openhc`（改包名会断掉升级链）
+- 🚗 **用途**：装在华为/荣耀手机的车机上，手机 HiCar 投屏到车机屏幕（与华为、比亚迪等公司无关）
+- 📦 **安装包**：[Releases](https://github.com/CHAIOR/Hi-Carlink/releases) 里的 `Hi Carlink-0.2.3-a6-android6.apk`（11.3 MB，`versionCode 203`，`versionName 0.2.3-a6`）
+- 🧩 **改动补丁**：[`dist/android6-support.patch`](dist/android6-support.patch)（相对上游 0.2.2，共 5 个文件）
 
-> **只在比亚迪车机上开发和调试。** 作者只有一台比亚迪车机和一部纯血鸿蒙的华为手机，所有功能只在这套组合上测试过。
-> 其他品牌的车机，或非纯血鸿蒙的手机上出的问题，作者没有设备，无法复现和修复；欢迎有能力的朋友自己调试，提交修复。
-> 手机是鸿蒙 4.x 及更早版本（非纯血鸿蒙）的，也可以试试另一个开源的车机端
-> [hicar-android-receiver](https://github.com/huducat586/hicar-android-receiver)（它的作者在鸿蒙 4 的手机上测过，目前只做无线）。
+> 本仓库是**第三方适配分支**，不是上游官方仓库。上游作者只在比亚迪车机 + 纯血鸿蒙手机上验证过，
+> 这里的 6.0 适配也只在源码层面完成，**需要在实车上验证**。
 
-## 0.2.0
+---
 
-装在**车机**上，不是手机上。不需要 root、ADB、系统签名，不依赖车机自带的 HiCar，不用注册账号，不连任何服务器。
-车机要允许安装 APK。
+## 为什么上游不支持 6.0
 
-- **有线**：USB 数据线，车机安卓 6.0 起。
-- **无线**：车机开热点，第一次手机扫码连接，之后上车自动连上；车机安卓 8.0 起。
-- **手机**：带 HiCar 的华为或荣耀手机（作者只在纯血鸿蒙手机上测试过）。有线连接时，手机要关闭「USB 调试」。
+无线连接这条路是：**车机开一个本地热点 → 手机连上来 → 走 TCP 传控制与视频**。
 
-## 功能
+- `WifiManager.startLocalOnlyHotspot()` 是 **API 26（Android 8.0）** 才加入的公开接口；
+- Android 6.0 上第三方应用没有任何公开 API 能创建热点、读回 SSID/口令；
+- 上游为了稳，没有走反射调 `@hide` 接口的野路子，而是按版本直接关掉了无线入口。
 
-- 画面：帧率自动跟随车机屏幕刷新率；清晰度三档可选；可全屏，也可保留车机底部导航栏。
-- 触摸：多指操作，地图可以双指缩放。
-- 声音：音乐和导航播报分开放；可以在设置里分别指定导航声道和音乐声道（编号同 DiPlay），带试听。
-- 方向盘按键：上一首、下一首、播放 / 暂停。
-- 免码回连：第一次输入车机上显示的连接码，之后不用再输。
-- 自动连接手机：手机蓝牙连上车机、或打开 OpenHC（含开机自动打开）时，车机主动去连用无线连成功过的手机，不用扫码；手机热点关着时手机上不用点。
-- 可选：插线时不再弹授权框、开机自动打开、无线结束后恢复车机 WiFi。
+硬件本身没问题：车机系统设置里能开“个人热点”，说明 Wi-Fi 芯片支持 AP 模式；缺的是系统给的权限/接口。
 
-## 使用
+## 这个分支改了什么
 
-1. 车机安装 OpenHC（[下载](https://github.com/GGBondLab/OpenHC/releases/latest)）。装过自己编译的调试包的，先卸载再装，签名不同不能覆盖。
-2. **有线**：首页点「开始」，手机插车机 USB 口，在手机上点「连接」，第一次输入车机显示的连接码。
-3. **无线**：首页「无线连接」点「开始」，手机扫车机上的二维码。连成功过一次以后，上车手机蓝牙连上车机，OpenHC 就会自己连上手机（设置 → 启动 →「自动连接手机」，默认开）。
+| 文件 | 改动 |
+|---|---|
+| `platform/.../wifi/LegacyHotspot.kt` | **新增**。反射调用 `setWifiApEnabled` / `getWifiApConfiguration` / `getWifiApState`，开一个 WPA2 热点；优先沿用车机原有的热点配置，否则生成固定的 `OpenHC-xxxx` + 10 位口令并存进 SharedPreferences（手机按网络名认车机，名字不能每次变） |
+| `platform/.../wifi/LocalHotspot.kt` | API 23～25 的申请走旧版路径；`readReservation()` / `closeQuietly()` 认识旧版热点；旧接口没有“热点被收回”回调，就绪后每 3 秒查一次状态 |
+| `app/.../wireless/WirelessNetworkPlan.kt` | `HOTSPOT_MIN_SDK` 26 → 23（无线入口、开机静默、悬浮窗判断一起放开） |
+| `app/build.gradle.kts` | 版本号 `0.2.3-a6` / `versionCode 203` |
+| `app/src/test/.../WifiRestorePolicyTest.kt` | 用例同步：23 起可用 |
 
-## 状态
+协议层、解码、USB、音频都没动，**有线连接行为与上游 0.2.2 完全一致**。
 
-有线、无线投屏和自动连接手机已在一台比亚迪安卓 10 车机和一部纯血鸿蒙的华为手机上验证（适配范围见页首说明）。
+## 安装
 
-已知限制：
+1. **先卸载车机上原来的 OpenHC**（官方包与这里的自签名不同，不能覆盖安装）；
+2. 车机允许安装未知来源 → 装 Release 里的 `Hi Carlink-0.2.3-a6-android6.apk`；
+3. 打开 → 设置 → 连接方式：`无线方式 = 车机开热点`（默认），关掉“只用数据线连接”；
+4. 首页 → 无线连接 → 开始 → 手机扫二维码；
+5. 手机 HiCar 里如果有旧的车机记录，先删掉再扫。
 
-- 用过车机自带 HiCar 或同类应用的手机，第一次连 OpenHC 可能失败：在手机 HiCar 里删掉旧的车机记录，再扫码连接。
-- 无线连接期间车机开着热点，车机自己的 WiFi 会断开；结束后安卓 10 起的车机可能要手动打开 WiFi（或打开「无线结束后恢复车机 WiFi」）。
-- 手机开着热点时，自动连接要在手机上点一次（手机会问要不要关热点）。手机上设置过「连上车机就自动开热点」的，想上车免点连上，在手机上把它关掉。
-- 车机热点在 2.4 GHz，和蓝牙在同一个频段：靠手机蓝牙自动连上后的一段时间里（蓝牙正忙），以及手机在后台频繁定位时，画面可能比较卡；连上以后关掉手机蓝牙能缓解（车机的蓝牙电话会跟着断）。无线时声音偶尔有很短的停顿。
-- 通话和车机麦克风还没有验证。
-- 安卓 10 起：OpenHC 在后台时，手机蓝牙连上车机要它自己弹出来、以及开机自动打开，都要先在设置 → 启动里打开悬浮窗权限；自己打开 OpenHC 再连则用不着。更新安装不会把它关掉。
-- 比亚迪车机：「开机自动打开」「自动连接手机」要在设置 → 启动 →「打开比亚迪的后台启动设置」里把 OpenHC 的开关关掉；每次更新 OpenHC 后要再关一次。
+第一次连不上时：设置 → 诊断 → 导出诊断日志，看 `OpenHC-Hotspot` 开头那几行。
 
-## 报告问题
+## 已知风险
 
-**作者只能处理比亚迪车机 + 纯血鸿蒙手机上的问题。** 其他车机、手机的问题可以提出来给大家参考，但作者没有设备，多半没法修。
+- **ROM 可能不允许**：旧接口在 AOSP 6.0 上只校验 `CHANGE_WIFI_STATE`，普通应用可调；但个别把“个人热点”做成系统独占的 ROM 会抛 `SecurityException`，应用侧无解。
+  这种车机可以改走 Wi-Fi Direct（P2P 直连组）方案——上游 0.2.1 的“5 GHz 直连”就是这条路，只是门槛写死在 Android 10（按指定频率建组要 API 29），6.0 上去掉频率参数即可。
+- 热点开在 2.4 GHz，与蓝牙同频；单射频车机开热点时自己的 Wi-Fi 会断（结束后应用会尝试恢复）。
+- 1 GB 内存 + Compose 界面的车机上，界面切换会偏慢；投屏建议 720p。
+- BLE 广播受车机蓝牙芯片能力限制：只影响“自动发现”，扫码连接不受影响。
 
-请在 [Issues](https://github.com/GGBondLab/OpenHC/issues) 里写明：车机型号和安卓版本、手机型号和系统版本、有线还是无线、操作步骤、
-期望和实际结果、出问题的时间，并附上诊断日志：0.2.1 起，出问题以后在 OpenHC「设置 → 诊断 → 导出诊断日志」，把生成的文件附上
-（安卓 10 起在「下载/OpenHC」文件夹；更早的系统在 `Android/data/io.github.gcbond.openhc/files/OpenHC`）；
-更早的版本能接 ADB 的话，附上 `adb logcat -v time | grep OpenHC-` 的输出。
-安全问题和连接参数的说明见 [安全说明](SECURITY.md)。
+## 从源码构建
 
-## 构建
+需要 JDK 17+、Android SDK 36：
 
-需要 JDK 17 和 Android SDK 36：
+```bash
+git clone <this-repo> && cd openhc-android6
+echo 'sdk.dir=/path/to/Android/Sdk' > local.properties
 
-```sh
-./gradlew check assembleDebug
+# 连接参数 openhc-identity.json 不在仓库里（上游也不放）：
+# 从官方发布包 assets/ 里取出来，放到某个目录，且该目录只能有这一个文件
+export OPENHC_IDENTITY_DIR=/path/to/identity
+# 签名配置（storeFile / storePassword / keyAlias / keyPassword）
+export OPENHC_SIGNING=/path/to/signing.properties
+
+./gradlew :app:assembleRelease
 ```
 
-安装包在 `app/build/outputs/apk/debug/`。代码结构见 [架构说明](docs/ARCHITECTURE.md)。
+产物：`app/build/outputs/apk/release/app-release.apk`
 
-要连得上手机，还需要一份连接参数文件 `openhc-identity.json`（不随源码发布，格式见 [示例](docs/identity.example.json)）：
-把它单独放进一个目录，在 `local.properties` 里写 `openhc.identity.dir=<目录>`（或设环境变量 `OPENHC_IDENTITY_DIR`），构建时会打进安装包。
+> 在 Windows 上如果 Gradle 下载/依赖解析报 PKIX 证书错误（企业代理），给 JVM 加上
+> `-Djavax.net.ssl.trustStoreType=WINDOWS-ROOT`（写进 `gradle.properties` 的 `org.gradle.jvmargs`）。
 
-## 参与
+## 许可证与署名
 
-欢迎提 Issue 和 Pull Request。提 Pull Request 前请注意：
+- 上游：<https://github.com/GGBondLab/OpenHC>，**GPL-3.0**（见 [LICENSE](LICENSE)），本仓库同样以 GPL-3.0 发布；
+- Release 里的 APK 是上游 0.2.2 源码 + 本仓库补丁的构建产物，署名同样归上游作者；
+- 上游 README 备份在 [README.upstream.md](README.upstream.md)。
 
-- 不要提交反编译得到的代码（Java、smali、伪代码）或照着它改写的代码，代码、注释和提交说明里也不要写厂商应用的类名、文件路径。
-  注释里写协议本身的事实（字段、长度、字节序、时序和为什么这样做）就好。
-- 测试数据一律用编造的值，不要用真实设备的地址、序列号、抓包或日志原文。
-- `core` 下的模块是纯 Kotlin，不能用 `android.*`，要能在安卓 6.0 上运行（构建时会检查）。
-- 提交前跑通 `./gradlew check assembleDebug`。
-- 提交的代码按本项目的 GPL-3.0 许可发布。
-
-## 致谢
-
-- **[DiPlay](https://github.com/shihabal3amri/DiPlay)**（作者 [shihabal3amri](https://github.com/shihabal3amri)）：安卓车机上的开源 CarPlay 接收端。
-  OpenHC 的很多思路和做法参考了它。感谢作者的开源分享。
-- **OpenHarmony security_device_auth**：配对认证部分的代码移植自它（Apache-2.0）。
-  用到的其他第三方组件和许可见 [第三方声明](docs/THIRD_PARTY_NOTICES.md)。
-
-## 声明
-
-HiCar 是华为技术有限公司的商标。本项目与华为及任何车企无关，未获得它们的授权或认可；按现状提供，使用风险自负。
-
-## 许可证
-
-[GPL-3.0-only](LICENSE)
+按 GPL-3.0，分发这个修改版需要同时提供对应源码——本仓库即为对应源码。
