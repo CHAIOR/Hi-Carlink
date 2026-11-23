@@ -6,7 +6,7 @@
 
 - 🏷️ **显示名**：启动器里叫 **Hi Carlink**；包名仍是 `io.github.gcbond.openhc`（改包名会断掉升级链）
 - 🚗 **用途**：装在华为/荣耀手机的车机上，手机 HiCar 投屏到车机屏幕（与华为、比亚迪等公司无关）
-- 📦 **安装包**：[Releases](https://github.com/CHAIOR/Hi-Carlink/releases) 里的 `Hi Carlink-0.2.3-a6-android6.apk`（11.3 MB，`versionCode 203`，`versionName 0.2.3-a6`）
+- 📦 **安装包**：[Releases](https://github.com/CHAIOR/Hi-Carlink/releases) 里的 `Hi-Carlink-0.2.3-a6-android6.apk`（11.3 MB，`versionCode 203`，`versionName 0.2.3-a6`）
 - 🧩 **改动补丁**：[`dist/android6-support.patch`](dist/android6-support.patch)（相对上游 0.2.2，共 5 个文件）
 
 > 本仓库是**第三方适配分支**，不是上游官方仓库。上游作者只在比亚迪车机 + 纯血鸿蒙手机上验证过，
@@ -39,7 +39,7 @@
 ## 安装
 
 1. **先卸载车机上原来的 OpenHC**（官方包与这里的自签名不同，不能覆盖安装）；
-2. 车机允许安装未知来源 → 装 Release 里的 `Hi Carlink-0.2.3-a6-android6.apk`；
+2. 车机允许安装未知来源 → 装 Release 里的 `Hi-Carlink-0.2.3-a6-android6.apk`；
 3. 打开 → 设置 → 连接方式：`无线方式 = 车机开热点`（默认），关掉“只用数据线连接”；
 4. 首页 → 无线连接 → 开始 → 手机扫二维码；
 5. 手机 HiCar 里如果有旧的车机记录，先删掉再扫。
