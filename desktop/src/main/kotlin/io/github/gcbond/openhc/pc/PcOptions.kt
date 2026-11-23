@@ -21,6 +21,8 @@ internal class PcOptions(
     val durationSeconds: Long? = null,
     /** 报给手机的热点频率（MHz）：Windows 读不到真实信道，先按 2.4G 第 6 信道。 */
     val frequencyMhz: Int = 2437,
+    /** 诊断：把蓝牙收发原始字节写到这个目录。 */
+    val dumpBtDir: String? = null,
 ) {
     companion object {
         val USAGE = """
@@ -34,6 +36,7 @@ internal class PcOptions(
               --password <口令>   热点口令，至少 8 位（默认 hicarlink123）
               --width/--height/--fps/--dpi  声明给手机的画布，默认 1280x720@30、dpi 160
               --freq <MHz>       报给手机的热点频率（Windows 读不到真实信道，默认 2437）
+              --dump-bt <目录>   诊断：把蓝牙收发原始字节写进这个目录
               --video-out <文件>  把 H.264 原样写到文件（调试用）
               --duration <秒>     运行这么久后自动结束
               --help              显示这段说明
@@ -52,6 +55,7 @@ internal class PcOptions(
             var videoOut: Path? = null
             var duration: Long? = null
             var freq = 2437
+            var dumpBt: String? = null
             var i = 0
             fun value(name: String): String {
                 if (i + 1 >= args.size) throw IllegalArgumentException("$name 后面要跟一个值")
@@ -72,6 +76,7 @@ internal class PcOptions(
                     "--video-out" -> videoOut = Path.of(value(a))
                     "--duration" -> duration = value(a).toLongOrNull() ?: throw IllegalArgumentException("--duration 要是秒数")
                     "--freq" -> freq = value(a).toIntOrNull() ?: throw IllegalArgumentException("--freq 要是 MHz 数")
+                    "--dump-bt" -> dumpBt = value(a)
                     else -> throw IllegalArgumentException("不认识的参数 $a")
                 }
                 i++
@@ -91,6 +96,7 @@ internal class PcOptions(
                 videoOut = videoOut,
                 durationSeconds = duration,
                 frequencyMhz = freq,
+                dumpBtDir = dumpBt,
             )
         }
     }

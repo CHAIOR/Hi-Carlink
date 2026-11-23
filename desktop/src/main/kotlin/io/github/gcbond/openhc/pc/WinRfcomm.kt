@@ -48,6 +48,12 @@ private const val SOCKADDR_BTH_SIZE = 30
 private const val WSAQUERYSET_SIZE = 120
 private const val CSADDR_INFO_SIZE = 40
 private const val INVALID_SOCKET = -1L
+// 服务端要「不加密、不要求认证」才能让没配对过的手机连上来（安卓那边用的是 insecure RFCOMM）。
+// 这台系统上 level 必须用 BTHPROTO_RFCOMM（3）；0x00000002 和 0x80000001 是它认的两个安全相关选项
+// （0x80000002 被拒）；具体哪个是 AUTHENTICATE 没查到权威头文件，就两个都设 0。
+private const val BTH_LEVEL = BTHPROTO_RFCOMM
+private const val BTH_OPT_SECURITY_A = 0x00000002
+private const val BTH_OPT_SECURITY_B = 0x80000001.toInt()
 
 /** ws2_32 的 JNA 绑定。SOCKET 是 UINT_PTR，按 64 位长整型传。 */
 private interface Ws2 : Library {
@@ -64,6 +70,8 @@ private interface Ws2 : Library {
     fun getsockname(s: Long, name: Pointer, namelen: IntByReference): Int
     fun getpeername(s: Long, name: Pointer, namelen: IntByReference): Int
     fun WSASetServiceW(lpqsRegInfo: Pointer, essoperation: Int, dwControlFlags: Int): Int
+    fun setsockopt(s: Long, level: Int, optname: Int, optval: Pointer, optlen: Int): Int
+    fun getsockopt(s: Long, level: Int, optname: Int, optval: Pointer, optlen: IntByReference): Int
     fun WSAGetLastError(): Int
 
     companion object {
@@ -149,18 +157,54 @@ private fun setService(uuid: UUID, channel: Int, localBt: Long, register: Boolea
     return Ws2.INSTANCE.WSASetServiceW(qs, if (register) RNRSERVICE_REGISTER else RNRSERVICE_DELETE, 0)
 }
 
+/**
+ * 读本机经典蓝牙地址：开一个 AF_BTH socket、bind 到任意通道、`getsockname` 就能拿到本机 BD_ADDR。
+ * 不用 PowerShell（有的机器上 Java 起不来 powershell.exe，报 CreateProcess error=5）。
+ */
+internal fun localBluetoothAddress(): String {
+    Ws2.startup()
+    val fd = Ws2.INSTANCE.socket(AF_BTH, SOCK_STREAM, BTHPROTO_RFCOMM)
+    if (fd == INVALID_SOCKET) throw IllegalStateException("开蓝牙 socket 失败（WSA ${Ws2.lastError()}）")
+    try {
+        val addr = sockaddrBth(0, UUID.fromString("00001101-0000-1000-8000-00805f9b34fb"), BT_PORT_ANY)
+        if (Ws2.INSTANCE.bind(fd, addr, SOCKADDR_BTH_SIZE) != 0) {
+            throw IllegalStateException("绑定蓝牙 socket 失败（WSA ${Ws2.lastError()}）：蓝牙可能没打开")
+        }
+        val local = Memory(SOCKADDR_BTH_SIZE.toLong()).apply { clear() }
+        val len = IntByReference(SOCKADDR_BTH_SIZE)
+        if (Ws2.INSTANCE.getsockname(fd, local, len) != 0) {
+            throw IllegalStateException("读本机蓝牙地址失败（WSA ${Ws2.lastError()}）")
+        }
+        val value = local.getLong(2)
+        if (value == 0L) throw IllegalStateException("本机蓝牙地址是 0：蓝牙没打开？")
+        return longToBtAddress(value)
+    } finally {
+        Ws2.INSTANCE.closesocket(fd)
+    }
+}
+
+private fun setBoolOption(fd: Long, option: Int, value: Boolean): Boolean {
+    val mem = Memory(4)
+    mem.setInt(0, if (value) 1 else 0)
+    return Ws2.INSTANCE.setsockopt(fd, BTH_LEVEL, option, mem, 4) == 0
+}
+
 // ---------------------------------------------------------------- 服务端
 
 private class Server(
     private val uuid: UUID,
     private val events: RfcommEvents,
 ) : RfcommHandle {
+    /** 诊断用：把这条通道收到的原始字节按顺序写文件（`-Dopenhc.dumpBt=<目录>`）。 */
+    private val dump = BluetoothDump("${uuid.toString().substring(4, 8)}")
     private var listenSocket: Long = INVALID_SOCKET
     private var connSocket: Long = INVALID_SOCKET
     private var channel = 0
     private var localBt = 0L
-    private var closed = false
+    @Volatile private var listenerClosed = false
+    @Volatile private var connectionClosed = false
     private val writeLock = Any()
+    private var dataLogged = false
 
     fun start() {
         val fd = Ws2.INSTANCE.socket(AF_BTH, SOCK_STREAM, BTHPROTO_RFCOMM)
@@ -169,6 +213,9 @@ private class Server(
             return
         }
         listenSocket = fd
+        val a = setBoolOption(fd, BTH_OPT_SECURITY_A, false)
+        val b = setBoolOption(fd, BTH_OPT_SECURITY_B, false)
+        println("[蓝牙] 服务端安全选项（不要求配对/加密）：${if (a) "A 已关" else "A 关不掉"}，${if (b) "B 已关" else "B 关不掉"}")
         val bindAddr = sockaddrBth(0, uuid, BT_PORT_ANY)
         val bindRc = Ws2.INSTANCE.bind(fd, bindAddr, SOCKADDR_BTH_SIZE)
         if (bindRc != 0) {
@@ -215,9 +262,11 @@ private class Server(
         val len = IntByReference(SOCKADDR_BTH_SIZE)
         val fd = Ws2.INSTANCE.accept(listenSocket, addr, len)
         if (fd == INVALID_SOCKET) {
-            if (!closed) events.onError("接受蓝牙连接失败（WSA ${Ws2.lastError()}）")
+            val err = Native.getLastError()
+            if (!listenerClosed) events.onError("接受蓝牙连接失败（WSA $err）")
             return
         }
+        println("[蓝牙] 有设备连上来了（服务 $uuid）")
         synchronized(writeLock) { connSocket = fd }
         val peer = longToBtAddress(addr.getLong(2))
         events.onAccepted(peer)
@@ -227,26 +276,34 @@ private class Server(
     private fun readLoop(fd: Long) {
         val buf = ByteArray(16384)
         try {
-            while (!closed) {
+            while (!connectionClosed) {
                 val n = Ws2.INSTANCE.recv(fd, buf, buf.size, 0)
                 when {
-                    n > 0 -> events.onData(buf.copyOf(n))
+                    n > 0 -> {
+                        if (!dataLogged) {
+                            dataLogged = true
+                            println("[蓝牙] ${uuid.toString().substring(4, 8)} 通道收到第一包 ${n} 字节")
+                        }
+                        dump.write(buf, n)
+                        events.onData(buf.copyOf(n))
+                    }
                     n == 0 -> {
                         events.onClosed()
                         return
                     }
                     else -> {
-                        if (!closed) events.onError("读蓝牙连接失败（WSA ${Ws2.lastError()}）")
+                        if (!connectionClosed) events.onError("读蓝牙连接失败（WSA ${Ws2.lastError()}）")
                         return
                     }
                 }
             }
         } catch (e: RuntimeException) {
-            if (!closed) events.onError("读蓝牙连接出错：${e.javaClass.simpleName}：${e.message}")
+            if (!connectionClosed) events.onError("读蓝牙连接出错：${e.javaClass.simpleName}：${e.message}")
         }
     }
 
     override fun write(bytes: ByteArray) {
+        dump.writeSent(bytes)
         synchronized(writeLock) {
             val fd = connSocket
             if (fd == INVALID_SOCKET) return
@@ -259,19 +316,27 @@ private class Server(
         }
     }
 
-    override fun close() {
-        closed = true
+    override fun closeListener() {
+        if (listenerClosed) return
+        listenerClosed = true
+        if (listenSocket != INVALID_SOCKET) {
+            if (channel in 1..30) setService(uuid, channel, localBt, register = false)
+            Ws2.INSTANCE.closesocket(listenSocket)
+            listenSocket = INVALID_SOCKET
+            println("[蓝牙] 关掉监听（服务 ${uuid.toString().substring(4, 8)}）：已接受的连接继续用")
+        }
+    }
+
+    override fun closeConnection() {
+        if (connectionClosed) return
+        connectionClosed = true
         synchronized(writeLock) {
             if (connSocket != INVALID_SOCKET) {
                 Ws2.INSTANCE.closesocket(connSocket)
                 connSocket = INVALID_SOCKET
             }
         }
-        if (listenSocket != INVALID_SOCKET) {
-            if (channel in 1..30) setService(uuid, channel, localBt, register = false)
-            Ws2.INSTANCE.closesocket(listenSocket)
-            listenSocket = INVALID_SOCKET
-        }
+        println("[蓝牙] 关掉连接（服务 ${uuid.toString().substring(4, 8)}）")
     }
 
     private fun closeSocket() {
@@ -345,7 +410,9 @@ private class Client(
         }
     }
 
-    override fun close() {
+    override fun closeListener() = Unit
+
+    override fun closeConnection() {
         closed = true
         synchronized(writeLock) {
             if (socket != INVALID_SOCKET) {
@@ -378,4 +445,51 @@ internal fun rfcommDebug(): String {
         }
     }
     return sb.toString()
+}
+
+/** 诊断：在 AF_BTH socket 上试各种 (level, option) 组合，找出这台系统认的「关认证/关加密」写法。 */
+internal fun probeBluetoothSocketOptions(): String {
+    Ws2.startup()
+    val fd = Ws2.INSTANCE.socket(AF_BTH, SOCK_STREAM, BTHPROTO_RFCOMM)
+    if (fd == INVALID_SOCKET) return "socket 失败（WSA ${Ws2.lastError()}）"
+    val sb = StringBuilder()
+    val levels = intArrayOf(0x0300, 0x0003, 0x0000)
+    val options = intArrayOf(1, 2, 3, 0x80000001.toInt(), 0x80000002.toInt(), 0x80000003.toInt(), 0x0004, 0x0005)
+    val mem = Memory(4).apply { setInt(0, 0) }
+    try {
+        for (level in levels) {
+            for (opt in options) {
+                val rc = Ws2.INSTANCE.setsockopt(fd, level, opt, mem, 4)
+                val err = Native.getLastError()
+                if (rc == 0) {
+                    val out = Memory(8).apply { clear() }
+                    val outLen = IntByReference(8)
+                    val g = Ws2.INSTANCE.getsockopt(fd, level, opt, out, outLen)
+                    val v = if (g == 0) out.getInt(0).toString() else "读不出(${Native.getLastError()})"
+                    sb.append("level=0x%04X opt=0x%08X -> OK，当前值=$v，长度=${outLen.value}\n".format(level, opt))
+                }
+                else if (err != 10042 && err != 10022) sb.append("level=0x%04X opt=0x%08X -> rc=$rc err=$err\n".format(level, opt))
+            }
+        }
+    } finally {
+        Ws2.INSTANCE.closesocket(fd)
+    }
+    return if (sb.isEmpty()) "所有组合都被拒（10042/10022）" else sb.toString()
+}
+
+
+/** 把蓝牙通道的原始收发写进文件，方便离线分析协议（默认关闭，`-Dopenhc.dumpBt=目录` 打开）。 */
+internal class BluetoothDump(private val name: String) {
+    private val stream: java.io.OutputStream? = runCatching {
+        val dir = System.getProperty("openhc.dumpBt") ?: return@runCatching null
+        val file = java.io.File(dir, "bt-$name.bin")
+        java.io.BufferedOutputStream(file.outputStream(), 64 * 1024)
+    }.getOrNull()
+
+    fun write(data: ByteArray, length: Int) = runCatching { stream?.write(data, 0, length) }.let { }
+
+    fun writeSent(data: ByteArray) = runCatching {
+        stream?.write("\n<<<SENT ${data.size}>>>\n".toByteArray(Charsets.US_ASCII))
+        stream?.write(data)
+    }.let { }
 }

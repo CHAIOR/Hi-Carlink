@@ -18,6 +18,9 @@ import javax.sound.sampled.SourceDataLine
  */
 internal class DesktopAudio(private val log: (String) -> Unit = {}) : AudioStreamListener, AutoCloseable {
     private val queue = LinkedBlockingQueue<ByteArray>(256)
+    private var aac: LiveAacDecoder? = null
+    private var aacKey: Pair<Int, Int>? = null
+    private var aacWarned = false
     @Volatile private var running = true
     @Volatile private var line: SourceDataLine? = null
     @Volatile private var formatKey: Pair<Int, Int>? = null
@@ -35,11 +38,16 @@ internal class DesktopAudio(private val log: (String) -> Unit = {}) : AudioStrea
     override fun onAudioPacket(packet: AudioPacket) {
         if (!running) return
         val info = packet.stream
-        if (packet.codec == AudioCodec.AAC || info.codec == AudioCodec.AAC) {
-            // 第一版不接 AAC：手机上把编码设成 PCM 才有声音。
+        if (!packet.playable) return
+        val isAac = packet.codec == AudioCodec.AAC || info.codec == AudioCodec.AAC
+        if (isAac) {
+            // AAC 解码走 avcodec 时目前会让 JVM 崩（原生内存问题），先整条路关掉，避免测试时整个程序闪退。
+            if (!aacWarned) {
+                aacWarned = true
+                log("手机发的是 AAC：这一版没有声音（AAC 解码还有原生内存问题；先在手机/车机设置里把声音编码改成 PCM）")
+            }
             return
         }
-        if (!packet.playable) return
         val bytes = ByteArray(packet.length)
         System.arraycopy(packet.data, packet.offset, bytes, 0, packet.length)
         if (!queue.offer(bytes)) {
@@ -50,7 +58,6 @@ internal class DesktopAudio(private val log: (String) -> Unit = {}) : AudioStrea
         val key = info.sampleRate to info.channels
         if (formatKey != key) {
             formatKey = key
-            // 换采样参数：让播放线程下一轮重建 line。
             queue.offer(BYTEARRAY_MARKER)
         }
     }
@@ -116,6 +123,8 @@ internal class DesktopAudio(private val log: (String) -> Unit = {}) : AudioStrea
     override fun close() {
         running = false
         worker.interrupt()
+        runCatching { aac?.close() }
+        aac = null
         closeLine()
     }
 

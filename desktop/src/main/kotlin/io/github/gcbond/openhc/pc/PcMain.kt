@@ -41,6 +41,10 @@ fun main(args: Array<String>) {
         System.err.println(PcOptions.USAGE)
         exitProcess(1)
     }
+    options.dumpBtDir?.let { dir ->
+        java.io.File(dir).mkdirs()
+        System.setProperty("openhc.dumpBt", dir)
+    }
     exitProcess(PcApp(options).run())
 }
 
@@ -53,12 +57,25 @@ internal class PcApp(private val options: PcOptions) {
     @Volatile private var ended = false
     @Volatile private var endReason: WirelessEndReason? = null
 
+    /** 当前阶段（给 20 秒一次的「当前阶段」日志用）。 */
+    @Volatile private var stage = "等手机扫码"
+
+    /** 首次配对的 6 位连接码。 */
+    @Volatile private var pin = ""
+
+    /** 同一份日志也写进文件，出问题时直接把文件发出来就行。 */
+    private val logFile: java.io.File? = runCatching {
+        val dir = java.io.File(System.getProperty("user.home"), ".hi-carlink").apply { mkdirs() }
+        java.io.File(dir, "last-run.log")
+    }.getOrNull()
+
     private lateinit var window: VideoWindow
     private lateinit var runner: SocketRunner
     private lateinit var bridge: WirelessRunnerBridge
     private lateinit var platform: WindowsPlatform
 
     fun run(): Int {
+        runCatching { logFile?.writeText("", Charsets.UTF_8) }
         log("Hi Carlink PC（实验）")
         val identity = try {
             IdentityAssets.parse(Files.readString(options.identity))
@@ -81,9 +98,9 @@ internal class PcApp(private val options: PcOptions) {
 
         val btAddress = if (options.bluetoothAddress.equals("auto", ignoreCase = true)) {
             try {
-                WinShell.localBluetoothAddress().also { log("本机蓝牙地址：$it") }
+                localBluetoothAddress().also { log("本机蓝牙地址：$it") }
             } catch (e: Exception) {
-                log("读不到本机蓝牙地址：${e.message}；请用 --bt 手工指定")
+                log("读不到本机蓝牙地址：${e.message}；请用 --bt 手工指定（AA:BB:CC:DD:EE:FF）")
                 return 1
             }
         } else {
@@ -151,6 +168,8 @@ internal class PcApp(private val options: PcOptions) {
         platform = WindowsPlatform(rfcomm, wifi, results, ::onWirelessEvent) { log(it) }
         bridge = WirelessRunnerBridge(session, session::start) { output -> platform.execute(output) }
         runner = SocketRunner(bridge, ::onSessionEvent, SocketRunner.Options(threadName = "HiCarlink-PC", log = { log("[执行器] $it") }))
+        // 必须先把桥接连上执行器再 start：平台回调（蓝牙连上、数据到达）都经桥接排回协议线程。
+        bridge.attach(runner)
 
         Runtime.getRuntime().addShutdownHook(thread(start = false, name = "pc-shutdown") {
             if (!ended) {
@@ -161,6 +180,13 @@ internal class PcApp(private val options: PcOptions) {
             runCatching { fileOut?.close() }
         })
         runner.start()
+        // 每 20 秒报一次当前阶段：车主看不到细节时，一眼知道卡在哪。
+        thread(isDaemon = true, name = "HiCarlink-Stage") {
+            while (!ended) {
+                Thread.sleep(20_000)
+                if (!ended) log("当前阶段：$stage")
+            }
+        }
         options.durationSeconds?.let { seconds ->
             thread(isDaemon = true) {
                 if (!runner.awaitTermination(java.util.concurrent.TimeUnit.SECONDS.toMillis(seconds))) {
@@ -200,28 +226,38 @@ internal class PcApp(private val options: PcOptions) {
     private fun onWirelessEvent(event: WirelessEvent) {
         when (event) {
             is WirelessEvent.PairingReady -> {
-                log("蓝牙监听已开好，连接码 ${event.pinCode}")
+                pin = event.pinCode
+                stage = "出二维码，等手机扫码"
+                log("蓝牙监听已开好，连接码 ${event.pinCode}（首次配对要在手机上输入这 6 位）")
                 window.showQr(event.qrCode)
-                window.setStatus("连接码 ${event.pinCode}\n手机用 HiCar 扫上面的二维码")
+                window.setStatus(
+                    "连接码 ${event.pinCode}  手机用 HiCar 扫上面的二维码\n" +
+                        "（连上以后要把 Windows「移动热点」打开：名字 ${options.hotspotSsid}，密码 ${options.hotspotPassword}）",
+                )
             }
             is WirelessEvent.PhoneBluetoothConnected -> {
                 log("手机蓝牙连上来了")
+                stage = "手机蓝牙已连上，等握手"
                 window.setStatus("手机蓝牙已连接，正在握手…")
             }
             is WirelessEvent.BluetoothHandshakeCompleted -> {
                 log("蓝牙握手完成（加密=${event.encrypted}）")
+                stage = "握手完成，等手机输连接码 $pin 并补认证"
                 window.setStatus("正在认证…（首次连接手机会要连接码）")
             }
             is WirelessEvent.DataChannelNegotiated -> {
                 log("数据通道协商完成：${event.frequencyMhz} MHz")
+                stage = "协商完成，要开热点"
                 window.setStatus("正在开热点，等手机加入 WiFi…")
             }
             is WirelessEvent.WifiNetworkReady -> {
                 log("WiFi 网络已开好：${event.frequencyMhz} MHz")
+                stage = "热点已就绪（${options.hotspotSsid}），等手机加入"
                 window.setStatus("热点已开好，等手机连上来…")
             }
             is WirelessEvent.ConnectionInfoSent -> {
                 log("连接串已发给手机，端口 ${event.port}，等手机连上来")
+                stage = "连接串已发，等手机连 TCP ${event.port}"
                 window.setStatus("等手机加入 WiFi（${options.hotspotSsid}）…")
             }
             is WirelessEvent.ReconnectAwaitingPhone -> log("等手机确认（状态 ${event.status}）")
@@ -243,7 +279,11 @@ internal class PcApp(private val options: PcOptions) {
         }
     }
 
-    private fun log(message: String) = println("${LocalTime.now().format(time)}  $message")
+    private fun log(message: String) {
+        val line = "${LocalTime.now().format(time)}  $message"
+        println(line)
+        runCatching { logFile?.appendText(line + "\n", Charsets.UTF_8) }
+    }
 
     private fun isWindows() = System.getProperty("os.name").lowercase().contains("win")
 

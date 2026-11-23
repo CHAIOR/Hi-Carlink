@@ -51,3 +51,17 @@ tasks.register<JavaExec>("avcodecTest") {
     classpath = sourceSets["main"].runtimeClasspath
     workingDir = projectDir
 }
+
+
+// AAC 解码自检：编码 1kHz 正弦 → 按 RTP 载荷逐帧解 → 写 WAV。
+tasks.register<JavaExec>("aacTest") {
+    mainClass.set("io.github.gcbond.openhc.pc.AacSelfTestKt")
+    classpath = sourceSets["main"].runtimeClasspath
+    workingDir = projectDir
+}
+
+// 诊断：试出系统认的蓝牙 socket 安全选项。
+tasks.register<JavaExec>("bthopts") {
+    mainClass.set("io.github.gcbond.openhc.pc.BthOptsKt")
+    classpath = sourceSets["main"].runtimeClasspath
+}

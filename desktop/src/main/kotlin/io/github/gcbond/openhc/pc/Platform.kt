@@ -30,10 +30,26 @@ internal interface RfcommEvents {
     fun onError(message: String)
 }
 
-/** 关闭监听或连接；写失败交给 [RfcommEvents.onError]。 */
+/**
+ * 一条 RFCOMM 监听 + 它接受下来的连接。
+ *
+ * **关监听不能把关掉的连接一起关掉**：会话在手机连上认证子通道后会先关掉两个监听（控制通道监听、认证子通道监听），
+ * 这时控制通道和认证通道的连接还得继续用。安卓的 `BluetoothServerSocket.close()` 就只撤服务记录，不影响已接受的 socket。
+ */
 internal interface RfcommHandle {
     fun write(bytes: ByteArray)
-    fun close()
+
+    /** 只关监听：撤掉 SDP 记录、不再接受新连接；已经接受的连接照常收发。 */
+    fun closeListener()
+
+    /** 只关这条连接。 */
+    fun closeConnection()
+
+    /** 两个都关（收尾兜底）。 */
+    fun close() {
+        closeListener()
+        closeConnection()
+    }
 }
 
 /** 热点（或直连组）的回调。 */
@@ -64,7 +80,15 @@ internal class WindowsPlatform(
     private val listeners = HashMap<Int, RfcommHandle>()
     private val networks = HashMap<Int, WifiNetworkHandle>()
 
+    private var writesLogged = 0
+
     fun execute(output: WirelessOutput) {
+        // 蓝牙/热点动作记一行，方便对照协议走到哪一步（写字节只记前几次）。
+        when (output) {
+            is WirelessAction.RfcommWrite -> if (writesLogged++ < 6) log("发送蓝牙数据 ${output.bytes.size} 字节")
+            is WirelessAction -> log("动作：${output::class.simpleName} ${output}")
+            else -> Unit
+        }
         when (output) {
             is WirelessAction.ListenRfcomm -> listen(output)
             is WirelessAction.ConnectRfcomm -> dial(output)
@@ -127,12 +151,14 @@ internal class WindowsPlatform(
     }
 
     private fun closeRfcomm(id: Int) {
-        val (listener, connection) = synchronized(lock) {
-            listeners.remove(id) to handles.remove(id)
+        // 会话给的 id 可能是监听 id，也可能是接受连接的 id：两者对应同一个句柄，但只该关对应的那一半。
+        val listener = synchronized(lock) { listeners.remove(id) }
+        if (listener != null) {
+            runCatching { listener.closeListener() }
+            return
         }
-        // 监听和它接受的连接是同一个句柄时只关一次。
-        val toClose = listOfNotNull(listener, connection).distinct()
-        toClose.forEach { runCatching { it.close() } }
+        val connection = synchronized(lock) { handles.remove(id) }
+        connection?.let { runCatching { it.closeConnection() } }
     }
 
     private fun startNetwork(id: Int) {
@@ -187,7 +213,8 @@ internal object UnavailableRfcomm : RfcommBackend {
         events.onError("Windows 蓝牙 RFCOMM 还没接上（占位实现）")
         return object : RfcommHandle {
             override fun write(bytes: ByteArray) = Unit
-            override fun close() = Unit
+            override fun closeListener() = Unit
+            override fun closeConnection() = Unit
         }
     }
 
@@ -195,7 +222,8 @@ internal object UnavailableRfcomm : RfcommBackend {
         events.onError("Windows 蓝牙 RFCOMM 还没接上（占位实现）")
         return object : RfcommHandle {
             override fun write(bytes: ByteArray) = Unit
-            override fun close() = Unit
+            override fun closeListener() = Unit
+            override fun closeConnection() = Unit
         }
     }
 }
