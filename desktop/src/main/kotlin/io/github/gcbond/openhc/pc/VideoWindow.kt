@@ -582,10 +582,17 @@ internal class VideoWindow(
     }
 
     private fun press(x: Float, y: Float) {
-        if (!touchDown) {
-            touchDown = true
-            send(HiSightInput.Touch.Action.DOWN, x, y)
+        if (touchDown) return
+        // 适应模式下点在黑边上不响应（否则会被钳到边缘，等于点了手机屏幕边上的按钮）。
+        val geometry = ScreenMapping.geometry(videoPanel.width, videoPanel.height, videoWidth, videoHeight, fullscreen)
+            ?: return
+        if (!fullscreen) {
+            val insideX = x >= geometry.offsetX && x <= geometry.offsetX + videoWidth * geometry.scale
+            val insideY = y >= geometry.offsetY && y <= geometry.offsetY + videoHeight * geometry.scale
+            if (!insideX || !insideY) return
         }
+        touchDown = true
+        send(HiSightInput.Touch.Action.DOWN, x, y)
     }
 
     private fun drag(x: Float, y: Float) {
