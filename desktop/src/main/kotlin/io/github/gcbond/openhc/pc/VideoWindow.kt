@@ -125,7 +125,7 @@ internal class VideoWindow(
             g2.color = background
             g2.fillRect(0, 0, width, height)
             val img = image
-            val geometry = ScreenMapping.geometry(width, height, videoWidth, videoHeight, fullscreen)
+            val geometry = ScreenMapping.geometry(width, height, videoWidth, videoHeight, fullscreen && !inputSettings.fullscreenFit)
             if (img != null && geometry != null) {
                 val dw = (geometry.videoWidth * geometry.scale).toInt()
                 val dh = (geometry.videoHeight * geometry.scale).toInt()
@@ -429,11 +429,8 @@ internal class VideoWindow(
         val middleBox = JComboBox(arrayOf("返回", "桌面", "最近任务", "不设置")).apply {
             selectedIndex = listOf("back", "home", "recents", "none").indexOf(current.middleButton).coerceAtLeast(0)
         }
-        val invertX = javax.swing.JCheckBox("左右反（画面左右和鼠标不一致时勾）").apply {
-            isSelected = current.invertX
-        }
-        val invertY = javax.swing.JCheckBox("上下反").apply {
-            isSelected = current.invertY
+        val fullscreenFit = javax.swing.JCheckBox("全屏时完整显示（画面比例和屏幕不同时留黑边，不裁切）").apply {
+            isSelected = current.fullscreenFit
         }
         val videoForm = JPanel(GridLayout(2, 2, 12, 12)).apply {
             border = BorderFactory.createEmptyBorder(16, 20, 4, 20)
@@ -450,12 +447,8 @@ internal class VideoWindow(
             add(middleBox)
             add(JLabel("滚轮"))
             add(invertWheel)
-            add(JLabel("坐标"))
-            add(JPanel(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
-                isOpaque = false
-                add(invertX)
-                add(invertY)
-            })
+            add(JLabel("全屏"))
+            add(fullscreenFit)
         }
         val buttons = JPanel(FlowLayout(FlowLayout.RIGHT)).apply {
             add(JButton("取消").apply { addActionListener { dialog.dispose() } })
@@ -470,8 +463,7 @@ internal class VideoWindow(
                             invertWheel = invertWheel.isSelected,
                             rightButton = listOf("back", "home", "recents", "none")[rightBox.selectedIndex],
                             middleButton = listOf("back", "home", "recents", "none")[middleBox.selectedIndex],
-                            invertX = invertX.isSelected,
-                            invertY = invertY.isSelected,
+                            fullscreenFit = fullscreenFit.isSelected,
                         )
                         AppSettings.save(settings)
                         inputSettings = settings
@@ -597,12 +589,10 @@ internal class VideoWindow(
 
     /** 窗口坐标 → 视频像素，按设置翻转 X/Y。 */
     private fun toVideo(x: Float, y: Float): Pair<Int, Int>? {
-        val geometry = ScreenMapping.geometry(videoPanel.width, videoPanel.height, videoWidth, videoHeight, fullscreen)
-            ?: return null
-        var (vx, vy) = ScreenMapping.toVideo(x, y, geometry)
-        if (inputSettings.invertX) vx = videoWidth - 1 - vx
-        if (inputSettings.invertY) vy = videoHeight - 1 - vy
-        return vx to vy
+        val geometry = ScreenMapping.geometry(
+            videoPanel.width, videoPanel.height, videoWidth, videoHeight, fullscreen && !inputSettings.fullscreenFit,
+        ) ?: return null
+        return ScreenMapping.toVideo(x, y, geometry)
     }
 
     private fun send(action: HiSightInput.Touch.Action, x: Float, y: Float) {
@@ -613,8 +603,9 @@ internal class VideoWindow(
     private fun press(x: Float, y: Float) {
         if (touchDown) return
         // 适应模式下点在黑边上不响应（否则会被钳到边缘，等于点了手机屏幕边上的按钮）。
-        val geometry = ScreenMapping.geometry(videoPanel.width, videoPanel.height, videoWidth, videoHeight, fullscreen)
-            ?: return
+        val geometry = ScreenMapping.geometry(
+            videoPanel.width, videoPanel.height, videoWidth, videoHeight, fullscreen && !inputSettings.fullscreenFit,
+        ) ?: return
         if (!fullscreen) {
             val insideX = x >= geometry.offsetX && x <= geometry.offsetX + videoWidth * geometry.scale
             val insideY = y >= geometry.offsetY && y <= geometry.offsetY + videoHeight * geometry.scale

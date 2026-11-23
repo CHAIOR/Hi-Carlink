@@ -28,10 +28,8 @@ internal data class AppSettings(
     val rightButton: String = "back",
     /** 鼠标中键做什么。 */
     val middleButton: String = "home",
-    /** 触摸坐标左右翻转（画面和手指方向对不上时用）。 */
-    val invertX: Boolean = false,
-    /** 触摸坐标上下翻转。 */
-    val invertY: Boolean = false,
+    /** 全屏时完整显示画面（必要时留黑边）；false = 裁切铺满。 */
+    val fullscreenFit: Boolean = true,
 ) {
     val preset: VideoPreset get() = VideoPresets.byName(resolution) ?: VideoPresets.TWO_K
 
@@ -53,8 +51,7 @@ internal data class AppSettings(
                     invertWheel = p.getProperty("invertWheel")?.toBoolean() ?: false,
                     rightButton = p.getProperty("rightButton") ?: "back",
                     middleButton = p.getProperty("middleButton") ?: "home",
-                    invertX = p.getProperty("invertX")?.toBoolean() ?: false,
-                    invertY = p.getProperty("invertY")?.toBoolean() ?: false,
+                    fullscreenFit = p.getProperty("fullscreenFit")?.toBoolean() ?: true,
                 )
             }.getOrDefault(AppSettings())
         }
@@ -69,8 +66,7 @@ internal data class AppSettings(
                     setProperty("invertWheel", settings.invertWheel.toString())
                     setProperty("rightButton", settings.rightButton)
                     setProperty("middleButton", settings.middleButton)
-                    setProperty("invertX", settings.invertX.toString())
-                    setProperty("invertY", settings.invertY.toString())
+                    setProperty("fullscreenFit", settings.fullscreenFit.toString())
                 }.store(f.outputStream(), "Hi Carlink PC settings")
             }
         }
