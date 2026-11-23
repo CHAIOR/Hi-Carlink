@@ -247,8 +247,8 @@ internal class VideoWindow(
             override fun mousePressed(e: MouseEvent) {
                 if (isShowingLog()) return
                 when (e.button) {
-                    MouseEvent.BUTTON3 -> keyFor(inputSettings.rightButton)?.let { sendKey(it) }
-                    MouseEvent.BUTTON2 -> keyFor(inputSettings.middleButton)?.let { sendKey(it) }
+                    MouseEvent.BUTTON3 -> sendKey(KEY_BACK)
+                    MouseEvent.BUTTON2 -> sendKey(KEY_HOME)
                     else -> press(e.x.toFloat(), e.y.toFloat())
                 }
             }
@@ -423,12 +423,6 @@ internal class VideoWindow(
         val invertWheel = javax.swing.JCheckBox("滚轮方向反过来（默认：滚轮往下 = 内容往下）").apply {
             isSelected = current.invertWheel
         }
-        val rightBox = JComboBox(arrayOf("返回", "桌面", "最近任务", "不设置")).apply {
-            selectedIndex = listOf("back", "home", "recents", "none").indexOf(current.rightButton).coerceAtLeast(0)
-        }
-        val middleBox = JComboBox(arrayOf("返回", "桌面", "最近任务", "不设置")).apply {
-            selectedIndex = listOf("back", "home", "recents", "none").indexOf(current.middleButton).coerceAtLeast(0)
-        }
         val fullscreenFit = javax.swing.JCheckBox("全屏时完整显示（画面比例和屏幕不同时留黑边，不裁切）").apply {
             isSelected = current.fullscreenFit
         }
@@ -439,12 +433,8 @@ internal class VideoWindow(
             add(JLabel("帧率"))
             add(fpsBox)
         }
-        val inputForm = JPanel(GridLayout(4, 2, 12, 12)).apply {
+        val inputForm = JPanel(GridLayout(2, 2, 12, 12)).apply {
             border = BorderFactory.createEmptyBorder(4, 20, 8, 20)
-            add(JLabel("鼠标右键"))
-            add(rightBox)
-            add(JLabel("鼠标中键"))
-            add(middleBox)
             add(JLabel("滚轮"))
             add(invertWheel)
             add(JLabel("全屏"))
@@ -461,8 +451,6 @@ internal class VideoWindow(
                             resolution = preset.name,
                             fps = chosenFps,
                             invertWheel = invertWheel.isSelected,
-                            rightButton = listOf("back", "home", "recents", "none")[rightBox.selectedIndex],
-                            middleButton = listOf("back", "home", "recents", "none")[middleBox.selectedIndex],
                             fullscreenFit = fullscreenFit.isSelected,
                         )
                         AppSettings.save(settings)
