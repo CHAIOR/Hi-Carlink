@@ -4,8 +4,8 @@
 [Setup]
 AppId={{8E2C71B4-5B7A-4F63-9C1E-2D4A6B8F0C31}
 AppName=Hi Carlink
-AppVersion=0.2.0
-AppVerName=Hi Carlink 0.2.0
+AppVersion=0.2.2
+AppVerName=Hi Carlink 0.2.2
 AppPublisher=CHAIOR
 AppPublisherURL=https://github.com/CHAIOR/Hi-Carlink
 DefaultDirName={autopf}\HiCarlinkPC
@@ -22,7 +22,7 @@ CloseApplications=yes
 RestartApplications=no
 AppMutex=HiCarlinkPC
 OutputDir=out
-OutputBaseFilename=HiCarlinkPC-Setup-0.2.0
+OutputBaseFilename=HiCarlinkPC-Setup-0.2.2
 SetupIconFile=HiCarlinkPC\app.ico
 UninstallDisplayIcon={app}\app.ico
 Compression=lzma2/max
@@ -42,11 +42,11 @@ Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: 
 Source: "HiCarlinkPC\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
-Name: "{autoprograms}\Hi Carlink"; Filename: "{app}\runtime\bin\javaw.exe"; Parameters: "-Xmx1g -Dfile.encoding=UTF-8 -cp ""{app}\app\*"" io.github.gcbond.openhc.pc.PcMainKt --identity ""{app}\identity\openhc-identity.json"" --trust-dir ""{userappdata}\.hi-carlink\trust"""; WorkingDir: "{app}"; IconFilename: "{app}\app.ico"
-Name: "{autodesktop}\Hi Carlink"; Filename: "{app}\runtime\bin\javaw.exe"; Parameters: "-Xmx1g -Dfile.encoding=UTF-8 -cp ""{app}\app\*"" io.github.gcbond.openhc.pc.PcMainKt --identity ""{app}\identity\openhc-identity.json"" --trust-dir ""{userappdata}\.hi-carlink\trust"""; WorkingDir: "{app}"; IconFilename: "{app}\app.ico"; Tasks: desktopicon
+Name: "{autoprograms}\Hi Carlink"; Filename: "{app}\runtime\bin\javaw.exe"; Parameters: "-javaagent:""{app}\app\hicarlink-agent.jar"" -Xmx1g -Dfile.encoding=UTF-8 -cp ""{app}\app\*"" io.github.gcbond.openhc.pc.PcMainKt --identity ""{app}\identity\openhc-identity.json"" --trust-dir ""{userappdata}\.hi-carlink\trust"""; WorkingDir: "{app}"; IconFilename: "{app}\app.ico"
+Name: "{autodesktop}\Hi Carlink"; Filename: "{app}\runtime\bin\javaw.exe"; Parameters: "-javaagent:""{app}\app\hicarlink-agent.jar"" -Xmx1g -Dfile.encoding=UTF-8 -cp ""{app}\app\*"" io.github.gcbond.openhc.pc.PcMainKt --identity ""{app}\identity\openhc-identity.json"" --trust-dir ""{userappdata}\.hi-carlink\trust"""; WorkingDir: "{app}"; IconFilename: "{app}\app.ico"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\runtime\bin\javaw.exe"; Parameters: "-Xmx1g -Dfile.encoding=UTF-8 -cp ""{app}\app\*"" io.github.gcbond.openhc.pc.PcMainKt --identity ""{app}\identity\openhc-identity.json"" --trust-dir ""{userappdata}\.hi-carlink\trust"""; WorkingDir: "{app}"; Description: "立即运行 Hi Carlink"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\runtime\bin\javaw.exe"; Parameters: "-javaagent:""{app}\app\hicarlink-agent.jar"" -Xmx1g -Dfile.encoding=UTF-8 -cp ""{app}\app\*"" io.github.gcbond.openhc.pc.PcMainKt --identity ""{app}\identity\openhc-identity.json"" --trust-dir ""{userappdata}\.hi-carlink\trust"""; WorkingDir: "{app}"; Description: "立即运行 Hi Carlink"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
