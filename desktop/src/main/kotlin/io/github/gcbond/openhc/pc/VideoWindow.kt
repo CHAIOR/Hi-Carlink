@@ -69,6 +69,9 @@ internal class VideoWindow(
     @Volatile private var pinCode = ""
     @Volatile private var status = "启动中…"
     @Volatile private var paintMillis = 0.0
+
+    /** 近一秒解出并上屏的帧数（全屏左上角显示）。 */
+    @Volatile private var decodeFps = 0
     @Volatile private var paintPending = false
     @Volatile private var touchDown = false
 
@@ -129,6 +132,17 @@ internal class VideoWindow(
                 g2.drawImage(img, geometry.offsetX.toInt(), geometry.offsetY.toInt(), dw, dh, null)
             } else {
                 paintPairingCard(g2)
+            }
+            if (fullscreen && videoWidth > 0) {
+                val text = "${videoWidth}x${videoHeight}  ${decodeFps}fps"
+                g2.font = Font(Font.SANS_SERIF, Font.PLAIN, 13)
+                val metrics = g2.fontMetrics
+                val tw = metrics.stringWidth(text)
+                val th = metrics.height
+                g2.color = Color(0, 0, 0, 110)
+                g2.fillRoundRect(12, 10, tw + 16, th + 2, 10, 10)
+                g2.color = Color(0xE8EAED)
+                g2.drawString(text, 20, 10 + th - 4)
             }
             val micros = (System.nanoTime() - started) / 1000.0
             paintMillis = if (paintMillis == 0.0) micros / 1000.0 else paintMillis * 0.8 + (micros / 1000.0) * 0.2
@@ -201,6 +215,9 @@ internal class VideoWindow(
         addActionListener { setFullscreen(!fullscreen) }
     }
 
+    private val headerPanel = buildHeader()
+    private val bottomPanel = buildBottomBar()
+
     private val cards = JPanel().apply { layout = java.awt.CardLayout() }
     private val window = JFrame("Hi Carlink").apply {
         defaultCloseOperation = WindowConstants.DO_NOTHING_ON_CLOSE
@@ -209,9 +226,9 @@ internal class VideoWindow(
         minimumSize = Dimension(900, 620)
         setLocationRelativeTo(null)
         contentPane.background = background
-        contentPane.add(buildHeader(), BorderLayout.NORTH)
+        contentPane.add(headerPanel, BorderLayout.NORTH)
         contentPane.add(cards, BorderLayout.CENTER)
-        contentPane.add(buildBottomBar(), BorderLayout.SOUTH)
+        contentPane.add(bottomPanel, BorderLayout.SOUTH)
         iconImage = loadIcon()?.image
         addWindowListener(object : WindowAdapter() {
             override fun windowClosing(e: WindowEvent) {
@@ -307,6 +324,7 @@ internal class VideoWindow(
         }
         bind(java.awt.event.KeyEvent.VK_F11, "toggle-fullscreen") { setFullscreen(!fullscreen) }
         bind(java.awt.event.KeyEvent.VK_F12, "toggle-log") { toggleLog() }
+        bind(java.awt.event.KeyEvent.VK_ESCAPE, "exit-fullscreen") { if (fullscreen) setFullscreen(false) }
     }
 
     // ---------------------------------------------------------------- 对外接口
@@ -503,6 +521,8 @@ internal class VideoWindow(
             }
             appendLog("[视频] 解码器已启动")
             var frames = 0
+            var fpsFrames = 0
+            var fpsAt = System.currentTimeMillis()
             while (running) {
                 val unit = try {
                     units.take()
@@ -518,6 +538,7 @@ internal class VideoWindow(
                 for (img in images) {
                     image = img
                     frames++
+                    fpsFrames++
                     if (frames == 1) appendLog("[视频] 第一帧画面 ${img.width}x${img.height}")
                     if (img.width != videoWidth || img.height != videoHeight) {
                         videoWidth = img.width
@@ -525,7 +546,15 @@ internal class VideoWindow(
                         SwingUtilities.invokeLater { window.title = "Hi Carlink — ${img.width}x${img.height}" }
                     }
                 }
-                if (images.isNotEmpty()) requestPaint()
+                if (images.isNotEmpty()) {
+                    val nowMs = System.currentTimeMillis()
+                    if (nowMs - fpsAt >= 1000) {
+                        decodeFps = ((fpsFrames * 1000L) / (nowMs - fpsAt)).toInt()
+                        fpsFrames = 0
+                        fpsAt = nowMs
+                    }
+                    requestPaint()
+                }
             }
             decoder.close()
         }, "HiCarlink-Decoder").apply { isDaemon = true }.start()
@@ -618,6 +647,9 @@ internal class VideoWindow(
         SwingUtilities.invokeLater {
             try {
                 val device = java.awt.GraphicsEnvironment.getLocalGraphicsEnvironment().defaultScreenDevice
+                headerPanel.isVisible = !fill
+                bottomPanel.isVisible = !fill
+                window.contentPane.revalidate()
                 if (fill) {
                     if (device.isFullScreenSupported) {
                         device.fullScreenWindow = window
