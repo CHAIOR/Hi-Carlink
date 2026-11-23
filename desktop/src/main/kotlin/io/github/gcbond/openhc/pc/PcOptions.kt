@@ -25,6 +25,8 @@ internal class PcOptions(
     val density: Double = 2.0,
     /** 启动就全屏铺满（任务栏让开、画面裁切）。 */
     val fullscreen: Boolean = false,
+    /** 命令行里显式给了分辨率/帧率（给了就以命令行为准，否则用界面里保存的设置）。 */
+    val explicitVideo: Boolean = false,
     /** 诊断：把蓝牙收发原始字节写到这个目录。 */
     val dumpBtDir: String? = null,
 ) {
@@ -64,6 +66,7 @@ internal class PcOptions(
             var dumpBt: String? = null
             var density = 2.0
             var fullscreen = false
+            var explicitVideo = false
             var i = 0
             fun value(name: String): String {
                 if (i + 1 >= args.size) throw IllegalArgumentException("$name 后面要跟一个值")
@@ -77,9 +80,9 @@ internal class PcOptions(
                     "--bt" -> bt = value(a)
                     "--ssid" -> ssid = value(a)
                     "--password" -> password = value(a)
-                    "--width" -> width = value(a).toIntOrNull() ?: throw IllegalArgumentException("--width 要是整数")
-                    "--height" -> height = value(a).toIntOrNull() ?: throw IllegalArgumentException("--height 要是整数")
-                    "--fps" -> fps = value(a).toIntOrNull() ?: throw IllegalArgumentException("--fps 要是整数")
+                    "--width" -> { width = value(a).toIntOrNull() ?: throw IllegalArgumentException("--width 要是整数"); explicitVideo = true }
+                    "--height" -> { height = value(a).toIntOrNull() ?: throw IllegalArgumentException("--height 要是整数"); explicitVideo = true }
+                    "--fps" -> { fps = value(a).toIntOrNull() ?: throw IllegalArgumentException("--fps 要是整数"); explicitVideo = true }
                     "--dpi" -> dpi = value(a).toIntOrNull() ?: throw IllegalArgumentException("--dpi 要是整数")
                     "--video-out" -> videoOut = Path.of(value(a))
                     "--duration" -> duration = value(a).toLongOrNull() ?: throw IllegalArgumentException("--duration 要是秒数")
@@ -109,6 +112,7 @@ internal class PcOptions(
                 dumpBtDir = dumpBt,
                 density = density,
                 fullscreen = fullscreen,
+                explicitVideo = explicitVideo,
             )
         }
     }

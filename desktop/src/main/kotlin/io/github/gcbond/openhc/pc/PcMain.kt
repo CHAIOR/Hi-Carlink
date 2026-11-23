@@ -47,7 +47,31 @@ fun main(args: Array<String>) {
         java.io.File(dir).mkdirs()
         System.setProperty("openhc.dumpBt", dir)
     }
-    exitProcess(PcApp(options).run())
+    // 只允许一个实例：两个实例会抢同一个蓝牙监听和热点，谁也连不上。
+    val lock = try {
+        val dir = java.io.File(System.getProperty("user.home"), ".hi-carlink").apply { mkdirs() }
+        java.nio.channels.FileChannel.open(
+            java.io.File(dir, "hicarlink.lock").toPath(),
+            java.nio.file.StandardOpenOption.CREATE,
+            java.nio.file.StandardOpenOption.WRITE,
+        ).tryLock()
+    } catch (e: Exception) {
+        null
+    }
+    if (lock == null) {
+        javax.swing.JOptionPane.showMessageDialog(
+            null,
+            "Hi Carlink 已经在运行了。\n请切换到已经打开的窗口，或先把它关掉再启动。",
+            "Hi Carlink",
+            javax.swing.JOptionPane.INFORMATION_MESSAGE,
+        )
+        return
+    }
+    try {
+        exitProcess(PcApp(options).run())
+    } finally {
+        runCatching { lock.release() }
+    }
 }
 
 /**
@@ -121,7 +145,16 @@ internal class PcApp(private val options: PcOptions) {
             options.bluetoothAddress
         }
 
-        val display = DisplaySettings(options.width, options.height, options.fps, options.dpi, options.density)
+        // 画质：命令行显式给了就听命令行的，否则用界面里保存的设置（默认 2K60）。
+        val settings = AppSettings.load()
+        val preset = settings.preset
+        val width = if (options.explicitVideo) options.width else preset.width
+        val height = if (options.explicitVideo) options.height else preset.height
+        val fps = if (options.explicitVideo) options.fps else settings.fps
+        val dpi = if (options.explicitVideo) options.dpi else preset.dpi
+        val density = if (options.explicitVideo) options.density else preset.density
+        log("画质：${width}x$height@$fps（dpi $dpi / density $density）")
+        val display = DisplaySettings(width, height, fps, dpi, density)
         val config = try {
             WirelessReceiverConfig(
                 identity = identity,
@@ -142,8 +175,8 @@ internal class PcApp(private val options: PcOptions) {
         }
 
         window = VideoWindow(
-            options.width,
-            options.height,
+            width,
+            height,
             ::sendTouch,
             ::sendKey,
             {
@@ -153,6 +186,9 @@ internal class PcApp(private val options: PcOptions) {
             },
             initialFullscreen = options.fullscreen,
             onRestart = { restartRequested?.countDown() },
+            onSettingsSaved = { saved ->
+                log("设置已保存：${saved.resolution} ${saved.fps} 帧（点「重新开始」后生效）")
+            },
         )
         window.show()
 
@@ -319,7 +355,7 @@ internal class PcApp(private val options: PcOptions) {
                 pin = event.pinCode
                 stage = "出二维码，等手机扫码"
                 log("蓝牙监听已开好，连接码 ${event.pinCode}（首次配对要在手机上输入这 6 位）")
-                window.showQr(event.qrCode)
+                window.showPairing(event.qrCode, event.pinCode)
                 window.setStatus(
                     "连接码 ${event.pinCode}  手机用 HiCar 扫上面的二维码\n" +
                         "（连上以后要把 Windows「移动热点」打开：名字 ${options.hotspotSsid}，密码 ${options.hotspotPassword}）",
@@ -373,6 +409,7 @@ internal class PcApp(private val options: PcOptions) {
     private fun log(message: String) {
         val line = "${LocalTime.now().format(time)}  $message"
         println(line)
+        if (this::window.isInitialized) window.appendLog(line)
         runCatching { logFile?.appendText(line + "\n", Charsets.UTF_8) }
     }
 

@@ -82,6 +82,20 @@ fun main() {
         println("自检：没抓到窗口画面")
     }
     window.close()
+
+    // 再截一张「待连接」界面：二维码 + 连接码卡片。
+    val pairPng = java.nio.file.Paths.get("pairing-selftest.png")
+    val pairing = VideoWindow(2560, 1440, onTouch = { _: HiSightInput -> }, onClosed = {})
+    pairing.show()
+    Thread.sleep(800)
+    pairing.showPairing("{}", "123456")
+    Thread.sleep(900)
+    val pairImg = pairing.snapshot()
+    if (pairImg != null) {
+        ImageIO.write(pairImg, "png", pairPng.toFile())
+        println("自检：待连接界面已存到 $pairPng（${pairImg.width}x${pairImg.height}）")
+    }
+    pairing.close()
     Thread.sleep(500)
-    if (Files.exists(outPng)) println("自检通过") else println("自检失败：没有生成截图")
+    if (Files.exists(outPng) && Files.exists(pairPng)) println("自检通过") else println("自检失败：没有生成截图")
 }
