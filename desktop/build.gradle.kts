@@ -84,3 +84,9 @@ tasks.register<JavaExec>("aacBisect") {
     mainClass.set("io.github.gcbond.openhc.pc.AacBisectKt")
     classpath = sourceSets["main"].runtimeClasspath
 }
+
+// 声音输出自检：往系统默认设备写 1 秒 440Hz，确认 Java Sound 能出声。
+tasks.register<JavaExec>("audioOutTest") {
+    mainClass.set("io.github.gcbond.openhc.pc.AudioSelfTestKt")
+    classpath = sourceSets["main"].runtimeClasspath
+}
