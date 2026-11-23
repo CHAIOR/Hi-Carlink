@@ -20,7 +20,9 @@
 同一套协议实现（`core:session`）移植到 Windows：手机扫码 → 蓝牙 RFCOMM 握手与认证 → 电脑「移动热点」→ TCP 会话
 → H.264 解码上屏（JavaCV/ffmpeg）+ 鼠标触摸回传 + PCM 声音。
 
-- 运行：Releases 里的 `HiCarlinkPC-win64.zip`，解压后双击 `HiCarlinkPC.bat`（自带 Java 运行时，不用装 JDK）
+- 下载：**[Hi Carlink PC 0.2.0](https://github.com/CHAIOR/Hi-Carlink/releases/tag/v0.2.0-pc)**
+  - `HiCarlinkPC-Setup-0.2.0.exe`：安装包（简体中文向导、可改安装位置、单窗口无控制台）
+  - `HiCarlinkPC-win64-0.2.0.zip`：绿色版（解压双击 `HiCarlinkPC.bat`，自带 Java 运行时）
 - 需要：Win10/11 x64、蓝牙和 Wi-Fi 都打开、电脑能上网（Windows 开热点要求有网络配置）
 - 平台实现：`WinRfcomm`（JNA 调 Winsock `AF_BTH`，注意 `SOCKADDR_BTH` 是 30 字节 pack(1) 布局）、
   `WinHotspot`（PowerShell + WinRT `NetworkOperatorTetheringManager`）、`VideoWindow`（JavaCV 解码 + Swing + 触摸）
