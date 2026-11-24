@@ -30,10 +30,13 @@ internal class DesktopAudio(private val log: (String) -> Unit = {}) : AudioStrea
         val rate: Int,
         val channels: Int,
         val session: String,
+        /** RTP 流号：不同路（音乐/导航/语音）必须各走各的输出线，否则两条流的数据会拼在一条线里，越放越堵。 */
+        val ssrc: Long,
     )
 
     private val queue = LinkedBlockingQueue<Chunk>(256)
-    private val lines = HashMap<Pair<Int, Int>, SourceDataLine>()
+    /** 输出线按「哪一路 + 采样率 + 声道」分开：同一路是同一条线，不同路各一条，由系统混音。 */
+    private val lines = HashMap<Triple<Long, Int, Int>, SourceDataLine>()
     private var aac: LiveAacDecoder? = null
     private var aacKey: Pair<Int, Int>? = null
 
@@ -83,7 +86,7 @@ internal class DesktopAudio(private val log: (String) -> Unit = {}) : AudioStrea
             rate = observeRate(info.dataSessionId, rate, channels, packet.length)
         }
 
-        val chunk = Chunk(bytes, rate, channels, info.dataSessionId)
+        val chunk = Chunk(bytes, rate, channels, info.dataSessionId, packet.ssrc)
         if (!queue.offer(chunk)) {
             queue.poll()
             queue.offer(chunk)
@@ -136,14 +139,14 @@ internal class DesktopAudio(private val log: (String) -> Unit = {}) : AudioStrea
             } catch (e: InterruptedException) {
                 return
             }
-            val line = lineFor(chunk.rate, chunk.channels) ?: continue
+            val line = lineFor(chunk.ssrc, chunk.rate, chunk.channels) ?: continue
             try {
                 line.write(chunk.bytes, 0, chunk.bytes.size)
                 played++
             } catch (e: Exception) {
                 log("写声音失败：${e.javaClass.simpleName}：${e.message}")
                 synchronized(lines) {
-                    lines.remove(chunk.rate to chunk.channels)
+                    lines.remove(Triple(chunk.ssrc, chunk.rate, chunk.channels))
                 }
                 runCatching { line.close() }
             }
@@ -159,20 +162,26 @@ internal class DesktopAudio(private val log: (String) -> Unit = {}) : AudioStrea
         }
     }
 
-    private fun lineFor(rate: Int, channels: Int): SourceDataLine? = synchronized(lines) {
-        lines[rate to channels]?.let { if (it.isOpen) return it }
-        lines.remove(rate to channels)
+    private fun lineFor(ssrc: Long, rate: Int, channels: Int): SourceDataLine? = synchronized(lines) {
+        val key = Triple(ssrc, rate, channels)
+        lines[key]?.let { if (it.isOpen) return it }
+        lines.remove(key)
+        // 线太多说明流号在乱变（或手机重连），把旧的都关掉，避免一直占着设备。
+        if (lines.size >= 8) {
+            lines.values.forEach { runCatching { it.stop() }; runCatching { it.close() } }
+            lines.clear()
+        }
         try {
             val format = AudioFormat(rate.toFloat(), 16, channels, true, false)
             val info = DataLine.Info(SourceDataLine::class.java, format)
             val line = AudioSystem.getLine(info) as SourceDataLine
             line.open(format, rate / 5 * 4) // 约 200ms 缓冲，抗抖动
             line.start()
-            lines[rate to channels] = line
-            log("声音输出：${rate}Hz ${channels} 声道")
+            lines[key] = line
+            log("声音输出：流 $ssrc，${rate}Hz ${channels} 声道")
             line
         } catch (e: Exception) {
-            log("打不开声音输出（${rate}Hz/${channels}）：${e.javaClass.simpleName}：${e.message}")
+            log("打不开声音输出（流 $ssrc，${rate}Hz/${channels}）：${e.javaClass.simpleName}：${e.message}")
             null
         }
     }
