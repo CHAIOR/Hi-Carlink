@@ -81,10 +81,15 @@ internal class PcApp(private val options: PcOptions) {
     private companion object {
         /** 断线后自动回连的间隔。 */
         const val AUTO_RECONNECT_DELAY_MS = 3_000L
+
+        /** 二维码模式下等手机扫码的时长；超时就去主动拨一次。 */
+        const val QR_WINDOW_MS = 25_000L
     }
     private val time = DateTimeFormatter.ofPattern("HH:mm:ss.SSS")
 
     @Volatile private var ended = false
+    @Volatile private var phoneConnected = false
+    @Volatile private var deadlineHit = false
     @Volatile private var windowClosed = false
     @Volatile private var restartRequested: java.util.concurrent.CountDownLatch? = null
     @Volatile private var endReason: WirelessEndReason? = null
@@ -198,29 +203,28 @@ internal class PcApp(private val options: PcOptions) {
         window.show()
 
         val saved = loadPhone()
-        if (saved != null) log("上次连过的手机：${saved.first}（断开时用它自动回连）")
-        var qrMode = true
-        var autoAttempts = 0
+        if (saved != null) {
+            log("上次连过的手机：${saved.first}（二维码显示期间每 ${QR_WINDOW_MS / 1000} 秒主动拨一次，手机打开 HiCar 就能连上）")
+        }
+        // 有记住的手机就先拨一次（手机没开 HiCar 时很快失败），失败再出二维码等一会儿，如此交替。
+        var dialNext = saved != null
         while (!windowClosed) {
-            val target: Pair<String, String>? = if (qrMode) null else saved
-            val reconnectFailed = runSession(config, target)
+            val target: Pair<String, String>? = if (dialNext) saved else null
+            val stop = runSession(config, target, deadlineMillis = if (target == null) QR_WINDOW_MS else 0L)
             if (windowClosed) break
             val reasonText = endReason?.toString() ?: ""
-            val networkDrop = reasonText.contains("网络错误") || reasonText.contains("被手机关闭") ||
-                reasonText.contains("连接被关闭")
-            if (!qrMode && reconnectFailed) {
-                log("主动回连没成，改成出二维码")
-                qrMode = true
+            if (target != null && stop == SessionStop.RECONNECT_FAILED) {
+                log("主动回连没成（手机可能没开 HiCar），先出二维码 ${QR_WINDOW_MS / 1000} 秒")
+                dialNext = false
                 continue
             }
-            if (qrMode && networkDrop && saved != null && autoAttempts < 2) {
-                autoAttempts++
-                log("连接断了（$reasonText），${AUTO_RECONNECT_DELAY_MS / 1000} 秒后自动回连（第 $autoAttempts 次）")
-                Thread.sleep(AUTO_RECONNECT_DELAY_MS)
-                qrMode = false
+            if (target == null && stop == SessionStop.DEADLINE) {
+                if (saved != null) {
+                    log("二维码已等 ${QR_WINDOW_MS / 1000} 秒，主动拨一次试试")
+                    dialNext = true
+                }
                 continue
             }
-            autoAttempts = 0
             window.showEnd("会话结束：${reasonText.ifEmpty { "未知" }}", allowRestart = true)
             val latch = java.util.concurrent.CountDownLatch(1)
             restartRequested = latch
@@ -229,14 +233,16 @@ internal class PcApp(private val options: PcOptions) {
             if (windowClosed || !restart) break
             log("用户点了重新开始")
             window.hideRestart()
-            qrMode = true
+            dialNext = saved != null
         }
         window.close()
         log("程序退出")
         return 0
     }
 
-    /** 跑一次无线会话（窗口一直留着）。[reconnect] 不为 null 时走主动回连；返回「回连是否失败」。 */
+    private enum class SessionStop { ENDED, RECONNECT_FAILED, DEADLINE }
+
+    /** 跑一次无线会话（窗口一直留着）。[reconnect] 不为 null 时走主动回连；二维码模式最多等 [deadlineMillis]。 */
     /**
      * 热点名/口令：命令行显式给了就听命令行的，否则用界面里保存的——
      * Windows 的移动热点名字/密码是用户自己设的，和默认值不一致时必须用实际值，否则手机会连不上。
@@ -250,10 +256,16 @@ internal class PcApp(private val options: PcOptions) {
         }
     }
 
-    private fun runSession(config: WirelessReceiverConfig, reconnect: Pair<String, String>? = null): Boolean {
+    private fun runSession(
+        config: WirelessReceiverConfig,
+        reconnect: Pair<String, String>? = null,
+        deadlineMillis: Long = 0,
+    ): SessionStop {
         ended = false
         endReason = null
-        stage = "等手机扫码"
+        phoneConnected = false
+        deadlineHit = false
+        stage = if (reconnect == null) "等手机扫码" else "主动回连手机"
         window.hideRestart()
         val (ssid, password) = hotspotCredentials()
         log("热点：$ssid（密码 ${password.length} 位，以设置里的为准）")
@@ -312,6 +324,19 @@ internal class PcApp(private val options: PcOptions) {
             runCatching { fileOut?.close() }
         })
         runner.start()
+        if (deadlineMillis > 0) {
+            thread(isDaemon = true, name = "HiCarlink-QrWindow") {
+                val until = System.currentTimeMillis() + deadlineMillis
+                while (!ended && !phoneConnected && System.currentTimeMillis() < until) {
+                    Thread.sleep(200)
+                }
+                if (!ended && !phoneConnected) {
+                    deadlineHit = true
+                    log("二维码已显示 ${deadlineMillis / 1000} 秒还没人扫，先停一下去主动回连")
+                    runner.stop()
+                }
+            }
+        }
         // 每 20 秒报一次当前阶段：车主看不到细节时，一眼知道卡在哪。
         thread(isDaemon = true, name = "HiCarlink-Stage") {
             while (!ended) {
@@ -341,7 +366,11 @@ internal class PcApp(private val options: PcOptions) {
             log("      再确认 Windows 防火墙允许 Java（专用网络），必要时把热点网络设成「专用」。")
         }
         val reasonText = endReason?.toString() ?: ""
-        return reconnect != null && reasonText.contains("主动回连")
+        return when {
+            deadlineHit -> SessionStop.DEADLINE
+            reconnect != null && reasonText.contains("主动回连") -> SessionStop.RECONNECT_FAILED
+            else -> SessionStop.ENDED
+        }
     }
 
     /** 鼠标右键/中键 → 安卓按键，同样投到协议线程。 */
@@ -382,8 +411,6 @@ internal class PcApp(private val options: PcOptions) {
                 stage = "出二维码，等手机扫码"
                 log("蓝牙监听已开好，连接码 ${event.pinCode}（首次配对要在手机上输入这 6 位）")
                 window.showPairing(event.qrCode, event.pinCode)
-                // 同时发 BLE 广播，让手机 HiCar 主动发现；连上以后就停掉。
-                beacon.start(600)
                 window.setStatus(
                     "连接码 ${event.pinCode}  手机用 HiCar 扫上面的二维码\n" +
                         "（连上以后要把 Windows「移动热点」打开：名字 ${hotspotCredentials().first}，密码就是设置里填的那个，要和 Windows 里显示的完全一致）",
@@ -391,6 +418,7 @@ internal class PcApp(private val options: PcOptions) {
             }
             is WirelessEvent.PhoneBluetoothConnected -> {
                 log("手机蓝牙连上来了（${event.address}）")
+                phoneConnected = true
                 beacon.stop()
                 savePhone(event.address)
                 stage = "手机蓝牙已连上，等握手"
