@@ -94,6 +94,7 @@ internal class PcApp(private val options: PcOptions) {
 
     /** 首次配对的 6 位连接码。 */
     @Volatile private var pin = ""
+    private val beacon = BleBeaconAdv { log(it) }
 
     /** 上次连成功的手机：存在 ~/.hi-carlink/phone.properties，下次启动先主动回连，不用扫码。 */
     private val phoneFile: java.io.File? = runCatching {
@@ -182,6 +183,7 @@ internal class PcApp(private val options: PcOptions) {
             ::sendKey,
             {
                 log("窗口被关掉，结束会话")
+                beacon.stop()
                 windowClosed = true
                 // 如果正停在「重新开始」的等待上，也要把它放出来，否则进程会在窗口消失后继续挂着。
                 restartRequested?.countDown()
@@ -331,6 +333,7 @@ internal class PcApp(private val options: PcOptions) {
         platform.closeAll()
         audio.close()
         runCatching { fileOut?.close() }
+        beacon.stop()
         log("结束：${endReason ?: "未知"}")
         val reason = endReason?.toString() ?: ""
         if (reason.contains("WiFi", ignoreCase = true) || reason.contains("WIFI")) {
@@ -379,6 +382,8 @@ internal class PcApp(private val options: PcOptions) {
                 stage = "出二维码，等手机扫码"
                 log("蓝牙监听已开好，连接码 ${event.pinCode}（首次配对要在手机上输入这 6 位）")
                 window.showPairing(event.qrCode, event.pinCode)
+                // 同时发 BLE 广播，让手机 HiCar 主动发现；连上以后就停掉。
+                beacon.start(600)
                 window.setStatus(
                     "连接码 ${event.pinCode}  手机用 HiCar 扫上面的二维码\n" +
                         "（连上以后要把 Windows「移动热点」打开：名字 ${hotspotCredentials().first}，密码就是设置里填的那个，要和 Windows 里显示的完全一致）",
@@ -386,6 +391,7 @@ internal class PcApp(private val options: PcOptions) {
             }
             is WirelessEvent.PhoneBluetoothConnected -> {
                 log("手机蓝牙连上来了（${event.address}）")
+                beacon.stop()
                 savePhone(event.address)
                 stage = "手机蓝牙已连上，等握手"
                 window.setStatus("手机蓝牙已连接，正在握手…")
